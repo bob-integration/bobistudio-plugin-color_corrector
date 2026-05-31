@@ -1,0 +1,8 @@
+{
+  "published_at": "2026-05-30",
+  "changes": [
+    "Correcteur de couleur (luma/chroma + color balance) appliqué à chaud sur un flux MXL ; rappel de presets via Ember+ (control.recall)."
+  ],
+  "fixes": [],
+  "known_bugs": []
+}
