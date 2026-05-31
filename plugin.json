@@ -1,6 +1,7 @@
 {
   "type": "color_corrector",
   "label": "Correcteur",
+  "badge": { "label": "Correcteur", "class": "mode-corrector" },
   "version": "0.2.0",
   "description": "Correcteur de couleur vidéo (luma/chroma + color balance) appliqué à chaud sur un flux du pipeline MXL.",
   "nav": { "section": "traitements", "label": "Traitements", "route": "/traitements/correcteurs", "order": 30 },
