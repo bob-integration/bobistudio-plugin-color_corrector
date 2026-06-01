@@ -1,26 +1,64 @@
 {
   "type": "color_corrector",
   "label": "Correcteur",
-  "badge": { "label": "Correcteur", "class": "mode-corrector" },
-  "version": "0.2.0",
+  "badge": {
+    "label": "Correcteur",
+    "class": "mode-corrector"
+  },
+  "version": "0.2.1",
   "description": "Correcteur de couleur vidéo (luma/chroma + color balance) appliqué à chaud sur un flux du pipeline MXL.",
-  "nav": { "section": "traitements", "label": "Traitements", "route": "/traitements/correcteurs", "order": 30 },
+  "nav": {
+    "section": "traitements",
+    "label": "Traitements",
+    "route": "/traitements/correcteurs",
+    "order": 30
+  },
   "script_template": "script.py",
-  "ui": { "control_html": "control.html", "control_js": "control.js", "control_css": "control.css" },
+  "ui": {
+    "control_html": "control.html",
+    "control_js": "control.js",
+    "control_css": "control.css"
+  },
   "deploy_defaults": {
-    "input_shm": null, "cc_params": {},
-    "width": 1280, "height": 720, "fps": 25, "scan": "p"
+    "input_shm": null,
+    "cc_params": {},
+    "width": 1280,
+    "height": 720,
+    "fps": 25,
+    "scan": "p"
   },
   "wiring": {
     "produces": [
-      { "essence": "video", "shm": "{hostname}_cc" }
+      {
+        "essence": "video",
+        "shm": "{hostname}_cc"
+      }
     ],
     "consumes": [
-      { "essence": "video", "state_field": "input_shm", "label": "Source vidéo" }
+      {
+        "essence": "video",
+        "state_field": "input_shm",
+        "label": "Source vidéo"
+      }
     ],
     "mode": "hot-wire",
     "state_endpoint": "/state"
   },
-  "control": { "endpoints": ["/state", "/params", "/reset", "/input"], "recall": { "source": "plugin_store", "scope": "global", "endpoint": "/params" } },
-  "store": { "scope": "global", "unique_name": true }
+  "control": {
+    "endpoints": [
+      "/state",
+      "/params",
+      "/reset",
+      "/input"
+    ],
+    "recall": {
+      "source": "plugin_store",
+      "scope": "global",
+      "endpoint": "/params"
+    }
+  },
+  "store": {
+    "scope": "global",
+    "unique_name": true
+  }
 }
