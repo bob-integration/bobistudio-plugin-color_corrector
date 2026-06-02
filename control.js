@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 BOBI SAS, France
+// Auteur : Cyril Mazouer, pour le compte de BOBI SAS
+// Distribué sous licence GNU GPL v3 (ou ultérieure) ; voir le fichier LICENSE.
+
 // Color corrector — UI de contrôle embarquée (plugin). Montée par le shell Traitements via
 // window.MXLPlugins.color_corrector.mount(el, vmid, ctx). Un seul éditeur actif à la fois
 // (le shell démonte le précédent avant d'en monter un autre). Aucun changement d'endpoints :

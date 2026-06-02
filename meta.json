@@ -1,9 +1,9 @@
 {
-  "version": "0.2.1",
-  "date": "2026-05-31",
+  "version": "0.2.2",
+  "date": "2026-06-02",
   "changes": {
     "Nouveautés": [
-      "Ring buffer vidéo/audio configurable depuis Réglages → MXL (shm_video_ring / shm_audio_ring)."
+      "Profondeur de bits du pipeline shm configurable 8/10/12 bits — pilotée par Réglages → MXL « Profondeur du pipeline shm » (force8 par défaut : 8 bits, comportement inchangé ; suivi du format : frames 10/12 bits stockées sur 16 bits, ×2 mémoire)."
     ],
     "Corrections": [],
     "Bugs connus": []
