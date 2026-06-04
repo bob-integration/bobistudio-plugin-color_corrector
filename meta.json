@@ -1,9 +1,9 @@
 {
-  "version": "0.2.2",
-  "date": "2026-06-02",
+  "version": "0.3.0",
+  "date": "2026-06-04",
   "changes": {
     "Nouveautés": [
-      "Profondeur de bits du pipeline shm configurable 8/10/12 bits — pilotée par Réglages → MXL « Profondeur du pipeline shm » (force8 par défaut : 8 bits, comportement inchangé ; suivi du format : frames 10/12 bits stockées sur 16 bits, ×2 mémoire)."
+      "Glow / Bloom : diffusion lumineuse des hautes lumières sur la luma (intensité / seuil / rayon), réglable à chaud et persistable en preset. Flou-boîte séparable par sommes cumulées (coût indépendant du rayon)."
     ],
     "Corrections": [],
     "Bugs connus": []

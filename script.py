@@ -77,6 +77,10 @@ DEFAULT_PARAMS = {{
     "gamma_r":    1.0,   # 0.1..10
     "gamma_g":    1.0,
     "gamma_b":    1.0,
+    # Glow / bloom : diffusion lumineuse des hautes lumières (luma only)
+    "glow":        0.0,  # 0..2 intensité (0 = désactivé)
+    "glow_thresh": 0.7,  # 0..1 seuil hautes lumières (fraction de la plage)
+    "glow_radius": 8.0,  # 1..64 rayon de diffusion (px, plein écran)
     # Colorbalance : -1..1 par canal × 3 zones (shadows/mids/highlights)
     "cb_rs": 0.0, "cb_gs": 0.0, "cb_bs": 0.0,
     "cb_rm": 0.0, "cb_gm": 0.0, "cb_bm": 0.0,
@@ -264,6 +268,42 @@ def rgb_to_yuv(rgb):
     v_u8 = np.clip(v[::_CH,::_CW], 0, _MAXf).astype(_NP_DT)
     return y_u8, u_u8, v_u8
 
+_GLOW_DS = 4   # facteur de sous-échantillonnage du flou (perf + halo plus large/doux)
+
+def _box_blur(img, r):
+    """Flou moyenne-mobile séparable (radius r px) sur un plan float32 (H,W).
+    Implémenté par sommes cumulées (O(N), indépendant du rayon)."""
+    r = int(r)
+    if r < 1:
+        return img
+    k = 2 * r + 1
+    # Horizontal (pad asymétrique r+1/r → taille préservée)
+    pad = np.pad(img, ((0, 0), (r + 1, r)), mode="constant")
+    cs = np.cumsum(pad, axis=1, dtype=np.float32)
+    img = (cs[:, k:] - cs[:, :-k]) / k
+    # Vertical
+    pad = np.pad(img, ((r + 1, r), (0, 0)), mode="constant")
+    cs = np.cumsum(pad, axis=0, dtype=np.float32)
+    img = (cs[k:, :] - cs[:-k, :]) / k
+    return img
+
+def _apply_glow(y, intensity, thresh, radius):
+    """Bloom luma : isole les hautes lumières au-dessus du seuil, les floute (à résolution
+    réduite ×_GLOW_DS) et les réinjecte en additif sur Y. Renvoie un plane (_NP_DT).
+    Seul l'ajout final tourne en pleine résolution → coût ~10 ms/frame en 720p."""
+    H, W = y.shape
+    thr = _BLACKf + max(0.0, min(1.0, thresh)) * (_MAXf - _BLACKf)
+    ds = _GLOW_DS
+    r = max(1, int(radius) // ds)
+    # Hautes lumières sous-échantillonnées, seuillées
+    small = y[::ds, ::ds].astype(np.float32) - thr
+    np.maximum(small, 0.0, out=small)
+    # Deux passes de flou-boîte ≈ gaussien (halo plus doux)
+    small = _box_blur(small, r)
+    small = _box_blur(small, r)
+    up = (small * intensity).repeat(ds, 0).repeat(ds, 1)[:H, :W]
+    return np.clip(y.astype(np.float32) + up, 0, _MAXf).astype(_NP_DT)
+
 def appliquer_correction(yuv_bytes, p):
     """Applique les params de correction. Renvoie yuv (selon chroma) bytes."""
     y, u, v = split_yuv(yuv_bytes)
@@ -332,6 +372,10 @@ def appliquer_correction(yuv_bytes, p):
 
         np.clip(rgb, 0, 255, out=rgb)
         y, u, v = rgb_to_yuv(rgb)
+
+    # ─ Glow / bloom luma (en dernier : s'applique sur l'image corrigée) ─
+    if p["glow"] > 0.0:
+        y = _apply_glow(y, p["glow"], p["glow_thresh"], p["glow_radius"])
 
     return join_yuv(y, u, v)
 

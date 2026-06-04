@@ -26,6 +26,11 @@ window.MXLPlugins.color_corrector = (function () {
         {key: "gamma_g", label: "Gamma V", min: 0.1, max: 10, step: 0.01, def: 1, unit: ""},
         {key: "gamma_b", label: "Gamma B", min: 0.1, max: 10, step: 0.01, def: 1, unit: ""},
     ];
+    const GLOW = [
+        {key: "glow",        label: "Intensité", min: 0,   max: 2,  step: 0.01, def: 0,   unit: ""},
+        {key: "glow_thresh", label: "Seuil",     min: 0,   max: 1,  step: 0.01, def: 0.7, unit: ""},
+        {key: "glow_radius", label: "Rayon",     min: 1,   max: 64, step: 1,    def: 8,   unit: "px"},
+    ];
     const CB_AXES = [{key:"r",short:"R"},{key:"g",short:"V"},{key:"b",short:"B"}];
     const CB_ZONES = [{key:"s",label:"Ombres"},{key:"m",label:"Midtones"},{key:"h",label:"Hautes lum."}];
 
@@ -194,6 +199,8 @@ window.MXLPlugins.color_corrector = (function () {
         const advHtml=!advanced?'':`<div id="cc-adv-section">
             <div class="cc-section"><h4>Gamma par canal</h4>
                 <div class="cc-knob-row">${ADV.map(pp=>knobHtml(pp,p[pp.key],def[pp.key]??pp.def)).join('')}</div></div>
+            <div class="cc-section"><h4>Glow / Bloom</h4>
+                <div class="cc-knob-row">${GLOW.map(pp=>knobHtml(pp,p[pp.key],def[pp.key]??pp.def)).join('')}</div></div>
             <div class="cc-section"><h4>Color Balance</h4><div class="cc-cb-grid">
                 ${CB_ZONES.map(z=>`<div class="cc-cb-zone"><h5>${z.label}</h5><div class="cc-knob-row cc-knob-row-tight">
                     ${CB_AXES.map(ax=>{const key=`cb_${ax.key}${z.key}`; return knobHtml({key,label:ax.short,min:-1,max:1,step:0.01,def:0,unit:""}, p[key], 0);}).join('')}
