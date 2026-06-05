@@ -1,9 +1,9 @@
 {
-  "version": "0.3.0",
-  "date": "2026-06-04",
+  "version": "0.4.0",
+  "date": "2026-06-05",
   "changes": {
     "Nouveautés": [
-      "Glow / Bloom : diffusion lumineuse des hautes lumières sur la luma (intensité / seuil / rayon), réglable à chaud et persistable en preset. Flou-boîte séparable par sommes cumulées (coût indépendant du rayon)."
+      "Exécution sous Docker (runtime compute générique : image bobi-compute, agent-in-container + réseau macvlan, /dev/shm bind-monté). Le type devient docker-only — créé via Réglages → Déploiement → Nœuds sur un nœud compute (plus de vaisseau LXC)."
     ],
     "Corrections": [],
     "Bugs connus": []

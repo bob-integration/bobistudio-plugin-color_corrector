@@ -2,11 +2,12 @@
   "license": "GPL-3.0-or-later",
   "type": "color_corrector",
   "label": "Correcteur",
+  "runtime": "docker",
   "badge": {
     "label": "Correcteur",
     "class": "mode-corrector"
   },
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Correcteur de couleur vidéo (luma/chroma + color balance + glow/bloom) appliqué à chaud sur un flux du pipeline MXL.",
   "nav": {
     "section": "traitements",
