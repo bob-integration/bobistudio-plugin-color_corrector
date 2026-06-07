@@ -1,9 +1,9 @@
 {
-  "version": "0.4.0",
-  "date": "2026-06-05",
+  "version": "0.5.0",
+  "date": "2026-06-07",
   "changes": {
     "Nouveautés": [
-      "Exécution sous Docker (runtime compute générique : image bobi-compute, agent-in-container + réseau macvlan, /dev/shm bind-monté). Le type devient docker-only — créé via Réglages → Déploiement → Nœuds sur un nœud compute (plus de vaisseau LXC)."
+      "Genlock broadcast par VERROU-ENTRÉE 1:1 : la sortie n'est plus cadencée en horloge mur libre (phase arbitraire + échantillonnage de la dernière entrée → judder possible) mais émet exactement UNE trame de sortie par trame d'ENTRÉE, dès qu'elle arrive → genlock propagé depuis la source, latence = temps de traitement (pas de requantification, pas de cumul d'1 trame par étage). Sans entrée câblée → noir continu cadencé ; entrée figée → maintien. Activé par défaut (deploy_defaults.genlock=true) ; off = comportement free-run hérité."
     ],
     "Corrections": [],
     "Bugs connus": []

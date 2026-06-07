@@ -39,6 +39,11 @@ SHM_OUT     = CONFIG.get("shm_out") or (HOSTNAME + "_cc")
 WIDTH       = int(CONFIG.get("width") or 1280);  WIDTH  -= WIDTH % 2
 HEIGHT      = int(CONFIG.get("height") or 720);  HEIGHT -= HEIGHT % 2
 FPS         = int(round(float(CONFIG.get("fps") or 25))) or 25
+# Genlock broadcast : verrou-entrée 1:1 (émet une trame de sortie par trame d'ENTRÉE, dès qu'elle
+# arrive → genlock propagé depuis la source, latence = temps de traitement, pas de judder/beat).
+# off → cadence libre horloge mur héritée (échantillonnage de la dernière entrée). Cf. plan synchro.
+_gl = CONFIG.get("genlock", True)
+GENLOCK = _gl if isinstance(_gl, bool) else str(_gl).strip().lower() in ("1", "true", "yes", "on")
 INITIAL_INPUT_SHM = (CONFIG.get("input_shm") or None)     # str ou None
 INITIAL_PARAMS    = CONFIG.get("cc_params") or {{}}        # dict
 
@@ -397,10 +402,18 @@ def _ecrire(shm, yuv, frame_index):
     shm[0:16] = struct.pack("QQ", frame_index, time.time_ns())
 
 frame_index = 0
+last_in_idx = 0
 start = time.time()
 next_t = start
 interval = 1.0 / FPS
+last_black = start
 empty_frame = b"\x10" * Y_SIZE + b"\x80" * (2 * UV_SIZE)
+
+def _in_index(shm):
+    """Index de trame courant du producteur d'entrée (0 si indispo)."""
+    if shm is None: return 0
+    try: return struct.unpack_from("Q", shm, 0)[0]
+    except Exception: return 0
 
 while True:
     if bus_error.is_set():
@@ -412,16 +425,32 @@ while True:
         except Exception: pass
         time.sleep(2)
         out_f, out_shm = _ouvrir_sortie()
+        last_in_idx = 0
         continue
 
-    now = time.time()
-    wait = next_t - now
-    if wait > 0: time.sleep(wait)
+    shm_in = ensure_input()
+
+    if GENLOCK:
+        # Verrou-entrée 1:1 : n'émettre QUE sur nouvelle trame d'entrée (genlock propagé, émission
+        # immédiate). Sans entrée câblée → noir continu cadencé. Entrée câblée mais figée → on tient.
+        idx_in = _in_index(shm_in)
+        if shm_in is None:
+            now = time.time()
+            if now - last_black >= interval:
+                _ecrire(out_shm, empty_frame, frame_index); frame_index += 1; last_black = now
+            time.sleep(0.002); continue
+        if idx_in == 0 or idx_in == last_in_idx:
+            time.sleep(0.002); continue
+        last_in_idx = idx_in; last_black = time.time()
+    else:
+        now = time.time()
+        wait = next_t - now
+        if wait > 0: time.sleep(wait)
 
     with state_lock:
         params = dict(state["params"])
 
-    in_yuv, ts_in = lire_frame_yuv(ensure_input())
+    in_yuv, ts_in = lire_frame_yuv(shm_in)
     if in_yuv:
         out_yuv = appliquer_correction(in_yuv, params)
     else:
@@ -431,7 +460,8 @@ while True:
     if in_yuv and ts_in:
         lat_in.push((ts_out - ts_in) / 1e6)
     frame_index += 1
-    next_t = start + frame_index * interval
+    if not GENLOCK:
+        next_t = start + frame_index * interval
 
     if frame_index % FPS == 0:
         elapsed = time.time() - start
