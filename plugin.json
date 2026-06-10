@@ -5,9 +5,12 @@
   "runtime": "docker",
   "badge": {
     "label": "Correcteur",
-    "class": "mode-corrector"
+    "class": "mode-corrector",
+    "oklch": "0.80 0.05 110"
   },
-  "version": "0.5.0",
+  "version": "0.5.1",
+  "video_format": false,
+  "adapts_input": true,
   "description": "Correcteur de couleur vidéo (luma/chroma + color balance + glow/bloom) appliqué à chaud sur un flux du pipeline MXL.",
   "nav": {
     "section": "traitements",
@@ -24,10 +27,6 @@
   "deploy_defaults": {
     "input_shm": null,
     "cc_params": {},
-    "width": 1280,
-    "height": 720,
-    "fps": 25,
-    "scan": "p",
     "genlock": true
   },
   "wiring": {
