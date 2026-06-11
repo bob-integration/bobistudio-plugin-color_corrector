@@ -1,9 +1,9 @@
 {
-  "version": "0.5.0",
-  "date": "2026-06-07",
+  "version": "0.5.1",
+  "date": "2026-06-08",
   "changes": {
     "Nouveautés": [
-      "Genlock broadcast par VERROU-ENTRÉE 1:1 : la sortie n'est plus cadencée en horloge mur libre (phase arbitraire + échantillonnage de la dernière entrée → judder possible) mais émet exactement UNE trame de sortie par trame d'ENTRÉE, dès qu'elle arrive → genlock propagé depuis la source, latence = temps de traitement (pas de requantification, pas de cumul d'1 trame par étage). Sans entrée câblée → noir continu cadencé ; entrée figée → maintien. Activé par défaut (deploy_defaults.genlock=true) ; off = comportement free-run hérité."
+      "Format adaptatif (video_format:false) : WIDTH/HEIGHT/FPS/CHROMA/BIT_DEPTH ne sont plus des constantes de déploiement. Le format est injecté par l'orchestrateur au câblage (POST /input {format:…}) ou déduit de la taille du shm d'entrée (heuristique 16:9). Le shm de sortie est recréé si le format change. Plus de champs format dans la palette de création."
     ],
     "Corrections": [],
     "Bugs connus": []

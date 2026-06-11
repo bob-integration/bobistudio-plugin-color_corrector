@@ -4,15 +4,19 @@
 # Distribué sous licence GNU GPL v3 (ou ultérieure) ; voir le fichier LICENSE.
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Color corrector plugin — corrige un flux vidéo YUV420p du pipeline MXL (luma/
+# Color corrector plugin — corrige un flux vidéo YUV du pipeline MXL (luma/
 # chroma + per-channel gamma + color balance), réglable À CHAUD via :8082.
 #   Entrée  : input_shm (câblable à chaud, mode hot-wire)
 #   Sortie  : {hostname}_cc
 #
+# Format adaptatif : WIDTH/HEIGHT/FPS/CHROMA/BIT_DEPTH sont détectés à la
+# connexion du câble (format injecté par l'orchestrateur via POST /input, ou
+# déduit de la taille du shm d'entrée avec heuristique 16:9).
+#
 # Template str.format : SEULS {config} / {hostname} / {plugin_version} sont des
 # placeholders. TOUTE autre accolade littérale doit être doublée {{ }}.
 # ─────────────────────────────────────────────────────────────────────────────
-import mmap, struct, time, threading, json, os, signal
+import mmap, struct, time, threading, json, os, signal, math
 from collections import deque
 import numpy as np
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -35,44 +39,71 @@ CONFIG         = {config}
 HOSTNAME       = "{hostname}"
 PLUGIN_VERSION = "{plugin_version}"
 
-SHM_OUT     = CONFIG.get("shm_out") or (HOSTNAME + "_cc")
-WIDTH       = int(CONFIG.get("width") or 1280);  WIDTH  -= WIDTH % 2
-HEIGHT      = int(CONFIG.get("height") or 720);  HEIGHT -= HEIGHT % 2
-FPS         = int(round(float(CONFIG.get("fps") or 25))) or 25
-# Genlock broadcast : verrou-entrée 1:1 (émet une trame de sortie par trame d'ENTRÉE, dès qu'elle
-# arrive → genlock propagé depuis la source, latence = temps de traitement, pas de judder/beat).
-# off → cadence libre horloge mur héritée (échantillonnage de la dernière entrée). Cf. plan synchro.
-_gl = CONFIG.get("genlock", True)
-GENLOCK = _gl if isinstance(_gl, bool) else str(_gl).strip().lower() in ("1", "true", "yes", "on")
-INITIAL_INPUT_SHM = (CONFIG.get("input_shm") or None)     # str ou None
-INITIAL_PARAMS    = CONFIG.get("cc_params") or {{}}        # dict
+SHM_OUT           = CONFIG.get("shm_out") or (HOSTNAME + "_cc")
+_gl               = CONFIG.get("genlock", True)
+GENLOCK           = _gl if isinstance(_gl, bool) else str(_gl).strip().lower() in ("1", "true", "yes", "on")
+INITIAL_INPUT_SHM = (CONFIG.get("input_shm") or None)
+INITIAL_PARAMS    = CONFIG.get("cc_params") or {{}}
 
-# ─── Format yuv420p/422p/444p (selon CONFIG[chroma], défaut 4:2:2) ──
-CHROMA = str(CONFIG.get("chroma") or "422")
-# Profondeur shm 8/10/12 bits. Les offsets colorimétriques (neutre/noir/max) sont paramétrés :
-# en 8 bits _NEUTf=128/_BLACKf=16/_MAXf=255 et dtype uint8 → traitement byte-identique.
-BIT_DEPTH = int(CONFIG.get("bit_depth") or 8)
-_DEEP  = BIT_DEPTH >= 10
-_BPS   = 2 if _DEEP else 1
-_NP_DT = np.uint16 if _DEEP else np.uint8
-_SCALE  = 1 << (BIT_DEPTH - 8)                  # 1 / 4 / 16 (échelle studio 8→N bits)
-_NEUTf  = float(1 << (BIT_DEPTH - 1))          # 128 / 512 / 2048
-_BLACKf = float(16 << (BIT_DEPTH - 8))         # 16 / 64 / 256
-_MAXf   = float((1 << BIT_DEPTH) - 1)          # 255 / 1023 / 4095
-_RGBMAX = 255.0                                 # l'espace RGB de travail reste 0..255
-_CW = {{"420": 2, "422": 2, "444": 1}}.get(CHROMA, 2)   # diviseur largeur chroma
-_CH = {{"420": 2, "422": 1, "444": 1}}.get(CHROMA, 1)   # diviseur hauteur chroma
-PIX_FMT = ({{"420": "yuv420p", "422": "yuv422p", "444": "yuv444p"}}.get(CHROMA, "yuv422p")
-           + (("12le" if BIT_DEPTH >= 12 else "10le") if _DEEP else ""))
-UV_W = WIDTH // _CW
-UV_H = HEIGHT // _CH
 V_HEADER_SIZE = 64
-V_RING_SIZE   = CONFIG.get("shm_video_ring", 10)
-Y_SIZE        = WIDTH * HEIGHT * _BPS
-UV_SIZE       = UV_W * UV_H * _BPS
-V_FRAME_SIZE  = Y_SIZE + 2 * UV_SIZE
-V_TOTAL_SIZE  = V_HEADER_SIZE + V_RING_SIZE * V_FRAME_SIZE
+V_RING_SIZE   = 10
+_RGBMAX = 255.0
 
+
+# ─── Layout YUV : calculé à partir du format détecté/injecté ───
+
+def _make_layout(w, h, chroma="422", bit_depth=8, fps=25):
+    """Calcule tous les dérivés de format nécessaires au traitement."""
+    w -= w % 2; h -= h % 2
+    deep  = bit_depth >= 10
+    bps   = 2 if deep else 1
+    np_dt = np.uint16 if deep else np.uint8
+    cw    = {{"420": 2, "422": 2, "444": 1}}.get(chroma, 2)
+    ch    = {{"420": 2, "422": 1, "444": 1}}.get(chroma, 1)
+    uv_w  = w // cw;  uv_h = h // ch
+    y_sz  = w * h * bps
+    uv_sz = uv_w * uv_h * bps
+    fr_sz = y_sz + 2 * uv_sz
+    total = V_HEADER_SIZE + V_RING_SIZE * fr_sz
+    return dict(
+        width=w, height=h, chroma=chroma, bit_depth=bit_depth, fps=fps,
+        deep=deep, bps=bps, np_dt=np_dt,
+        scale=1 << (bit_depth - 8),
+        neutf=float(1 << (bit_depth - 1)),
+        blackf=float(16 << (bit_depth - 8)),
+        maxf=float((1 << bit_depth) - 1),
+        cw=cw, ch=ch, uv_w=uv_w, uv_h=uv_h,
+        y_sz=y_sz, uv_sz=uv_sz, fr_sz=fr_sz, total=total,
+    )
+
+def _detect_fmt(path):
+    """Déduit W×H depuis la taille du fichier shm (ring=10 header=64).
+    Essaie d'abord YUV422 8-bit puis YUV420 8-bit, ratio 16:9."""
+    try:
+        sz = os.path.getsize(path)
+    except OSError:
+        return None
+    fs = (sz - V_HEADER_SIZE) // V_RING_SIZE
+    if fs <= 0:
+        return None
+    # YUV422 8bit : frame = w*h*2 ; ratio 16:9 → fs = 288*k²
+    k2 = fs / 288.0
+    k  = math.isqrt(int(k2))
+    for kk in (k, k + 1):
+        w, h = kk * 16, kk * 9
+        if w > 0 and w * h * 2 == fs:
+            return {{"width": w, "height": h, "chroma": "422", "bit_depth": 8}}
+    # YUV420 8bit : frame = w*h*3//2 ; ratio 16:9 → fs = 216*k²
+    k2 = fs / 216.0
+    k  = math.isqrt(int(k2))
+    for kk in (k, k + 1):
+        w, h = kk * 16, kk * 9
+        if w > 0 and w * h + 2 * (w // 2) * (h // 2) == fs:
+            return {{"width": w, "height": h, "chroma": "420", "bit_depth": 8}}
+    return None
+
+
+# ─── Paramètres colorimétriques ─────────────────────────────
 DEFAULT_PARAMS = {{
     "brightness": 0.0,   # -1..1
     "contrast":   1.0,   # 0..2
@@ -93,7 +124,6 @@ DEFAULT_PARAMS = {{
 }}
 
 def _norm_params(d):
-    """Merge d sur DEFAULT_PARAMS, coercion float, valeurs hors plage ignorées."""
     out = dict(DEFAULT_PARAMS)
     for k, v in (d or {{}}).items():
         if k in DEFAULT_PARAMS:
@@ -101,11 +131,13 @@ def _norm_params(d):
             except (TypeError, ValueError): pass
     return out
 
+
 # ─── État runtime ───────────────────────────────────────────
 state_lock = threading.Lock()
 state = {{
     "input_shm": INITIAL_INPUT_SHM,
     "params":    _norm_params(INITIAL_PARAMS),
+    "fmt":       None,    # dict injecté par /input ou None (→ auto-détection)
 }}
 
 # Métriques
@@ -160,7 +192,6 @@ class ControlHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = self._read_json()
         if self.path == "/params":
-            # PATCH : merge des clés fournies (les autres restent inchangées).
             with state_lock:
                 cur = dict(state["params"])
                 for k, v in (body or {{}}).items():
@@ -174,11 +205,14 @@ class ControlHandler(BaseHTTPRequestHandler):
                 state["params"] = dict(DEFAULT_PARAMS)
             self._reply(200, {{"ok": True}})
         elif self.path == "/input":
-            # Schéma générique plugin {{essence, shm}} — `essence` ignoré (1 entrée vidéo).
-            shm = body.get("shm")
-            shm = (shm or "").strip() or None
+            shm = (body.get("shm") or "").strip() or None
+            fmt = body.get("format")
             with state_lock:
                 state["input_shm"] = shm
+                if fmt and fmt.get("width") and fmt.get("height"):
+                    state["fmt"] = fmt
+                elif shm is None:
+                    state["fmt"] = None
             self._reply(200, {{"ok": True}})
         else:
             self._reply(404, {{"error": "not found"}})
@@ -215,9 +249,10 @@ def ensure_input():
     path = f"/dev/shm/{{wanted}}"
     try:
         if not os.path.exists(path): return None
-        if os.path.getsize(path) < V_TOTAL_SIZE: return None
+        if os.path.getsize(path) <= V_HEADER_SIZE: return None
         f = open(path, "r+b")
-        shm = mmap.mmap(f.fileno(), V_TOTAL_SIZE, prot=mmap.PROT_READ)
+        sz = os.path.getsize(path)
+        shm = mmap.mmap(f.fileno(), sz, prot=mmap.PROT_READ)
         _ = shm[0:16]
         input_handle = (f, shm, wanted)
         print(f"input câblé sur {{path}}")
@@ -226,142 +261,122 @@ def ensure_input():
         print(f"input ({{wanted}}) indisponible : {{e}}")
         return None
 
-def lire_frame_yuv(shm):
+def lire_frame_yuv(shm, lyt):
     """Renvoie (yuv_bytes, ts_in_ns) ou (None, None)."""
     if shm is None: return None, None
     try:
         frame_index, ts_in = struct.unpack("QQ", shm[0:16])
         if frame_index == 0: return None, None
-        slot = frame_index % V_RING_SIZE
-        offset = V_HEADER_SIZE + slot * V_FRAME_SIZE
-        return bytes(shm[offset:offset + V_FRAME_SIZE]), ts_in
+        slot   = frame_index % lyt["ring_r"]
+        offset = V_HEADER_SIZE + slot * lyt["fr_sz"]
+        return bytes(shm[offset:offset + lyt["fr_sz"]]), ts_in
     except Exception:
         return None, None
 
 
 # ─── Color correction (numpy) ───────────────────────────────
-def split_yuv(yuv_bytes):
-    """yuv (420p/422p/444p selon chroma) bytes → (Y, U, V) numpy arrays (uint8/uint16)."""
-    y = np.frombuffer(yuv_bytes[:Y_SIZE], dtype=_NP_DT).reshape(HEIGHT, WIDTH).copy()
-    u = np.frombuffer(yuv_bytes[Y_SIZE:Y_SIZE+UV_SIZE], dtype=_NP_DT).reshape(UV_H, UV_W).copy()
-    v = np.frombuffer(yuv_bytes[Y_SIZE+UV_SIZE:],       dtype=_NP_DT).reshape(UV_H, UV_W).copy()
+def split_yuv(yuv_bytes, lyt):
+    y_sz = lyt["y_sz"]; uv_sz = lyt["uv_sz"]
+    np_dt = lyt["np_dt"]; h = lyt["height"]; w = lyt["width"]
+    uv_h = lyt["uv_h"]; uv_w = lyt["uv_w"]
+    y = np.frombuffer(yuv_bytes[:y_sz],           dtype=np_dt).reshape(h, w).copy()
+    u = np.frombuffer(yuv_bytes[y_sz:y_sz+uv_sz], dtype=np_dt).reshape(uv_h, uv_w).copy()
+    v = np.frombuffer(yuv_bytes[y_sz+uv_sz:],     dtype=np_dt).reshape(uv_h, uv_w).copy()
     return y, u, v
 
 def join_yuv(y, u, v):
     return y.tobytes() + u.tobytes() + v.tobytes()
 
-def yuv_to_rgb(y, u, v):
-    """Y(H,W) + U,V → RGB float32 (H,W,3) en 0..255. La profondeur N bits est ramenée à
-    l'échelle studio 8 bits (÷_SCALE) avant les coefficients BT.601 8 bits."""
-    yf = y.astype(np.float32) / _SCALE
-    uf = u.repeat(_CH, axis=0).repeat(_CW, axis=1).astype(np.float32) / _SCALE
-    vf = v.repeat(_CH, axis=0).repeat(_CW, axis=1).astype(np.float32) / _SCALE
+def yuv_to_rgb(y, u, v, lyt):
+    """Y(H,W) + U,V → RGB float32 (H,W,3) en 0..255."""
+    sc = lyt["scale"]; ch = lyt["ch"]; cw = lyt["cw"]
+    yf = y.astype(np.float32) / sc
+    uf = u.repeat(ch, axis=0).repeat(cw, axis=1).astype(np.float32) / sc
+    vf = v.repeat(ch, axis=0).repeat(cw, axis=1).astype(np.float32) / sc
     c = yf - 16.0; d = uf - 128.0; e = vf - 128.0
     r = 1.164*c              + 1.596*e
     g = 1.164*c - 0.392*d    - 0.813*e
     b = 1.164*c + 2.017*d
     return np.stack([np.clip(r,0,255), np.clip(g,0,255), np.clip(b,0,255)], axis=2)
 
-def rgb_to_yuv(rgb):
-    """RGB float32 (H,W,3) 0..255 → (Y, U, V) à la profondeur cible (×_SCALE)."""
+def rgb_to_yuv(rgb, lyt):
+    """RGB float32 (H,W,3) 0..255 → (Y, U, V) à la profondeur cible."""
+    sc = lyt["scale"]; ch = lyt["ch"]; cw = lyt["cw"]
+    maxf = lyt["maxf"]; np_dt = lyt["np_dt"]
     r = rgb[:,:,0]; g = rgb[:,:,1]; b = rgb[:,:,2]
-    y = ( 0.257*r + 0.504*g + 0.098*b + 16.0)  * _SCALE
-    u = (-0.148*r - 0.291*g + 0.439*b + 128.0) * _SCALE
-    v = ( 0.439*r - 0.368*g - 0.071*b + 128.0) * _SCALE
-    y_u8 = np.clip(y, 0, _MAXf).astype(_NP_DT)
-    u_u8 = np.clip(u[::_CH,::_CW], 0, _MAXf).astype(_NP_DT)
-    v_u8 = np.clip(v[::_CH,::_CW], 0, _MAXf).astype(_NP_DT)
-    return y_u8, u_u8, v_u8
+    y = ( 0.257*r + 0.504*g + 0.098*b + 16.0)  * sc
+    u = (-0.148*r - 0.291*g + 0.439*b + 128.0) * sc
+    v = ( 0.439*r - 0.368*g - 0.071*b + 128.0) * sc
+    y_out = np.clip(y,            0, maxf).astype(np_dt)
+    u_out = np.clip(u[::ch,::cw], 0, maxf).astype(np_dt)
+    v_out = np.clip(v[::ch,::cw], 0, maxf).astype(np_dt)
+    return y_out, u_out, v_out
 
-_GLOW_DS = 4   # facteur de sous-échantillonnage du flou (perf + halo plus large/doux)
+_GLOW_DS = 4
 
 def _box_blur(img, r):
-    """Flou moyenne-mobile séparable (radius r px) sur un plan float32 (H,W).
-    Implémenté par sommes cumulées (O(N), indépendant du rayon)."""
     r = int(r)
-    if r < 1:
-        return img
+    if r < 1: return img
     k = 2 * r + 1
-    # Horizontal (pad asymétrique r+1/r → taille préservée)
     pad = np.pad(img, ((0, 0), (r + 1, r)), mode="constant")
-    cs = np.cumsum(pad, axis=1, dtype=np.float32)
+    cs  = np.cumsum(pad, axis=1, dtype=np.float32)
     img = (cs[:, k:] - cs[:, :-k]) / k
-    # Vertical
     pad = np.pad(img, ((r + 1, r), (0, 0)), mode="constant")
-    cs = np.cumsum(pad, axis=0, dtype=np.float32)
-    img = (cs[k:, :] - cs[:-k, :]) / k
-    return img
+    cs  = np.cumsum(pad, axis=0, dtype=np.float32)
+    return (cs[k:, :] - cs[:-k, :]) / k
 
-def _apply_glow(y, intensity, thresh, radius):
-    """Bloom luma : isole les hautes lumières au-dessus du seuil, les floute (à résolution
-    réduite ×_GLOW_DS) et les réinjecte en additif sur Y. Renvoie un plane (_NP_DT).
-    Seul l'ajout final tourne en pleine résolution → coût ~10 ms/frame en 720p."""
+def _apply_glow(y, intensity, thresh, radius, lyt):
     H, W = y.shape
-    thr = _BLACKf + max(0.0, min(1.0, thresh)) * (_MAXf - _BLACKf)
-    ds = _GLOW_DS
-    r = max(1, int(radius) // ds)
-    # Hautes lumières sous-échantillonnées, seuillées
+    blackf = lyt["blackf"]; maxf = lyt["maxf"]; np_dt = lyt["np_dt"]
+    thr = blackf + max(0.0, min(1.0, thresh)) * (maxf - blackf)
+    ds  = _GLOW_DS; r = max(1, int(radius) // ds)
     small = y[::ds, ::ds].astype(np.float32) - thr
     np.maximum(small, 0.0, out=small)
-    # Deux passes de flou-boîte ≈ gaussien (halo plus doux)
-    small = _box_blur(small, r)
-    small = _box_blur(small, r)
+    small = _box_blur(small, r); small = _box_blur(small, r)
     up = (small * intensity).repeat(ds, 0).repeat(ds, 1)[:H, :W]
-    return np.clip(y.astype(np.float32) + up, 0, _MAXf).astype(_NP_DT)
+    return np.clip(y.astype(np.float32) + up, 0, maxf).astype(np_dt)
 
-def appliquer_correction(yuv_bytes, p):
-    """Applique les params de correction. Renvoie yuv (selon chroma) bytes."""
-    y, u, v = split_yuv(yuv_bytes)
+def appliquer_correction(yuv_bytes, p, lyt):
+    """Applique les params de correction. Renvoie yuv bytes."""
+    neutf = lyt["neutf"]; maxf = lyt["maxf"]; np_dt = lyt["np_dt"]
+    y, u, v = split_yuv(yuv_bytes, lyt)
 
-    # ─ Path YUV (gratuit, ops sur planes Y et U/V uniquement) ─
     yf = y.astype(np.float32)
-    uf = u.astype(np.float32) - _NEUTf
-    vf = v.astype(np.float32) - _NEUTf
+    uf = u.astype(np.float32) - neutf
+    vf = v.astype(np.float32) - neutf
 
-    # Brightness : décalage en luma (-1..1 → -neutre..+neutre)
     if p["brightness"] != 0.0:
-        yf = yf + p["brightness"] * _NEUTf
-    # Contrast : (Y-neutre)*c + neutre
+        yf = yf + p["brightness"] * neutf
     if p["contrast"] != 1.0:
-        yf = (yf - _NEUTf) * p["contrast"] + _NEUTf
-    # Saturation : multiplie chroma
+        yf = (yf - neutf) * p["contrast"] + neutf
     if p["saturation"] != 1.0:
         uf = uf * p["saturation"]
         vf = vf * p["saturation"]
-    # Gamma global sur Y
     if p["gamma"] != 1.0 and p["gamma"] > 0:
-        yn = np.clip(yf, 0, _MAXf) / _MAXf
-        yf = np.power(yn, 1.0 / p["gamma"]) * _MAXf
-    # Hue rotation : rotation 2D du plan (U, V)
+        yn = np.clip(yf, 0, maxf) / maxf
+        yf = np.power(yn, 1.0 / p["gamma"]) * maxf
     if p["hue"] != 0.0:
         rad = p["hue"] * np.pi / 180.0
         cs, sn = np.cos(rad), np.sin(rad)
-        u_new = uf * cs - vf * sn
-        v_new = uf * sn + vf * cs
-        uf, vf = u_new, v_new
+        uf, vf = uf * cs - vf * sn, uf * sn + vf * cs
 
-    y = np.clip(yf, 0, _MAXf).astype(_NP_DT)
-    u = np.clip(uf + _NEUTf, 0, _MAXf).astype(_NP_DT)
-    v = np.clip(vf + _NEUTf, 0, _MAXf).astype(_NP_DT)
+    y = np.clip(yf, 0, maxf).astype(np_dt)
+    u = np.clip(uf + neutf, 0, maxf).astype(np_dt)
+    v = np.clip(vf + neutf, 0, maxf).astype(np_dt)
 
-    # ─ Path RGB (slow) : seulement si gamma R/G/B ou colorbalance non-identité ─
     need_rgb = (
         p["gamma_r"] != 1.0 or p["gamma_g"] != 1.0 or p["gamma_b"] != 1.0 or
         any(p[k] != 0.0 for k in
             ("cb_rs","cb_gs","cb_bs","cb_rm","cb_gm","cb_bm","cb_rh","cb_gh","cb_bh"))
     )
     if need_rgb:
-        rgb = yuv_to_rgb(y, u, v)   # float32 0..255, full resolution
-
-        # Per-channel gamma
+        rgb = yuv_to_rgb(y, u, v, lyt)
         if p["gamma_r"] != 1.0 and p["gamma_r"] > 0:
             rgb[:,:,0] = np.power(rgb[:,:,0] / 255.0, 1.0 / p["gamma_r"]) * 255.0
         if p["gamma_g"] != 1.0 and p["gamma_g"] > 0:
             rgb[:,:,1] = np.power(rgb[:,:,1] / 255.0, 1.0 / p["gamma_g"]) * 255.0
         if p["gamma_b"] != 1.0 and p["gamma_b"] > 0:
             rgb[:,:,2] = np.power(rgb[:,:,2] / 255.0, 1.0 / p["gamma_b"]) * 255.0
-
-        # Colorbalance : poids par zone tonale (shadows/mids/highlights)
         if any(p[k] != 0.0 for k in
                ("cb_rs","cb_gs","cb_bs","cb_rm","cb_gm","cb_bm","cb_rh","cb_gh","cb_bh")):
             L = (0.299*rgb[:,:,0] + 0.587*rgb[:,:,1] + 0.114*rgb[:,:,2]) / 255.0
@@ -374,46 +389,50 @@ def appliquer_correction(yuv_bytes, p):
                  ("cb_bs","cb_bm","cb_bh"))):
                 off = (shadow_w * p[s_k] + mid_w * p[m_k] + hi_w * p[h_k]) * 128.0
                 rgb[:,:,idx] = rgb[:,:,idx] + off
-
         np.clip(rgb, 0, 255, out=rgb)
-        y, u, v = rgb_to_yuv(rgb)
+        y, u, v = rgb_to_yuv(rgb, lyt)
 
-    # ─ Glow / bloom luma (en dernier : s'applique sur l'image corrigée) ─
     if p["glow"] > 0.0:
-        y = _apply_glow(y, p["glow"], p["glow_thresh"], p["glow_radius"])
+        y = _apply_glow(y, p["glow"], p["glow_thresh"], p["glow_radius"], lyt)
 
     return join_yuv(y, u, v)
 
 
 # ─── Boucle principale ──────────────────────────────────────
-def _ouvrir_sortie():
+out_f   = None
+out_shm = None
+cur_lyt = None    # layout actif (None = pas encore de format connu)
+
+def _ouvrir_sortie(total_size):
+    global out_f, out_shm
     path = f"/dev/shm/{{SHM_OUT}}"
+    if out_shm is not None:
+        try: out_shm.close()
+        except Exception: pass
+    if out_f is not None:
+        try: out_f.close()
+        except Exception: pass
     with open(path, "wb") as f:
-        f.write(b"\x00" * V_TOTAL_SIZE)
-    f = open(path, "r+b")
-    return f, mmap.mmap(f.fileno(), V_TOTAL_SIZE)
+        f.write(b"\x00" * total_size)
+    out_f   = open(path, "r+b")
+    out_shm = mmap.mmap(out_f.fileno(), total_size)
 
-out_f, out_shm = _ouvrir_sortie()
-
-def _ecrire(shm, yuv, frame_index):
-    slot = frame_index % V_RING_SIZE
-    offset = V_HEADER_SIZE + slot * V_FRAME_SIZE
-    shm[offset:offset + V_FRAME_SIZE] = yuv
-    shm[0:16] = struct.pack("QQ", frame_index, time.time_ns())
-
-frame_index = 0
-last_in_idx = 0
-start = time.time()
-next_t = start
-interval = 1.0 / FPS
-last_black = start
-empty_frame = b"\x10" * Y_SIZE + b"\x80" * (2 * UV_SIZE)
+def _ecrire(yuv, frame_index, lyt):
+    slot   = frame_index % V_RING_SIZE
+    offset = V_HEADER_SIZE + slot * lyt["fr_sz"]
+    out_shm[offset:offset + lyt["fr_sz"]] = yuv
+    out_shm[0:16] = struct.pack("QQ", frame_index, time.time_ns())
 
 def _in_index(shm):
-    """Index de trame courant du producteur d'entrée (0 si indispo)."""
     if shm is None: return 0
     try: return struct.unpack_from("Q", shm, 0)[0]
     except Exception: return 0
+
+frame_index = 0
+last_in_idx = 0
+start       = time.time()
+next_t      = start
+last_black  = start
 
 while True:
     if bus_error.is_set():
@@ -421,41 +440,82 @@ while True:
         if input_handle is not None:
             try: input_handle[1].close(); input_handle[0].close()
             except Exception: pass
-        try: out_shm.close(); out_f.close()
-        except Exception: pass
+        if out_shm is not None:
+            try: out_shm.close(); out_f.close()
+            except Exception: pass
+            out_f = out_shm = None
+        cur_lyt = None
         time.sleep(2)
-        out_f, out_shm = _ouvrir_sortie()
         last_in_idx = 0
         continue
 
     shm_in = ensure_input()
 
+    # ─── Résolution du format ────────────────────────────────
+    with state_lock:
+        fmt_hint = state["fmt"]
+        in_name  = state["input_shm"]
+    new_lyt = None
+    if fmt_hint and fmt_hint.get("width") and fmt_hint.get("height"):
+        new_lyt = _make_layout(
+            fmt_hint["width"], fmt_hint["height"],
+            fmt_hint.get("chroma", "422"),
+            fmt_hint.get("bit_depth", 8),
+            fmt_hint.get("fps", 25),
+        )
+    elif shm_in is not None and in_name:
+        detected = _detect_fmt(f"/dev/shm/{{in_name}}")
+        if detected:
+            new_lyt = _make_layout(detected["width"], detected["height"],
+                                   detected.get("chroma", "422"),
+                                   detected.get("bit_depth", 8))
+
+    if new_lyt is None:
+        # Format inconnu : attendre que l'entrée soit disponible
+        time.sleep(0.05)
+        continue
+
+    # Reconfigurer le shm de sortie si le format a changé
+    if cur_lyt is None or cur_lyt["total"] != new_lyt["total"]:
+        cur_lyt = new_lyt
+        # Ajoute ring_r (ring size de l'entrée = convention globale V_RING_SIZE)
+        cur_lyt["ring_r"] = V_RING_SIZE
+        _ouvrir_sortie(cur_lyt["total"])
+        last_in_idx = 0
+        frame_index = 0
+        start = time.time(); next_t = start; last_black = start
+        print(f"format: {{cur_lyt['width']}}x{{cur_lyt['height']}} chroma={{cur_lyt['chroma']}}")
+
+    fps      = cur_lyt["fps"]
+    interval = 1.0 / fps
+    empty_frame = (b"\x10" * cur_lyt["y_sz"] +
+                   b"\x80" * (2 * cur_lyt["uv_sz"]))
+
     if GENLOCK:
-        # Verrou-entrée 1:1 : n'émettre QUE sur nouvelle trame d'entrée (genlock propagé, émission
-        # immédiate). Sans entrée câblée → noir continu cadencé. Entrée câblée mais figée → on tient.
         idx_in = _in_index(shm_in)
         if shm_in is None:
             now = time.time()
             if now - last_black >= interval:
-                _ecrire(out_shm, empty_frame, frame_index); frame_index += 1; last_black = now
+                _ecrire(empty_frame, frame_index, cur_lyt)
+                frame_index += 1; last_black = now
             time.sleep(0.002); continue
         if idx_in == 0 or idx_in == last_in_idx:
             time.sleep(0.002); continue
         last_in_idx = idx_in; last_black = time.time()
     else:
-        now = time.time()
+        now  = time.time()
         wait = next_t - now
         if wait > 0: time.sleep(wait)
 
     with state_lock:
         params = dict(state["params"])
 
-    in_yuv, ts_in = lire_frame_yuv(shm_in)
+    in_yuv, ts_in = lire_frame_yuv(shm_in, cur_lyt)
     if in_yuv:
-        out_yuv = appliquer_correction(in_yuv, params)
+        out_yuv = appliquer_correction(in_yuv, params, cur_lyt)
     else:
         out_yuv = empty_frame
-    _ecrire(out_shm, out_yuv, frame_index)
+    _ecrire(out_yuv, frame_index, cur_lyt)
     ts_out = time.time_ns()
     if in_yuv and ts_in:
         lat_in.push((ts_out - ts_in) / 1e6)
@@ -463,11 +523,9 @@ while True:
     if not GENLOCK:
         next_t = start + frame_index * interval
 
-    if frame_index % FPS == 0:
+    if frame_index % max(1, fps) == 0:
         elapsed = time.time() - start
         with metrics_lock:
             metrics["fps"] = round(frame_index / elapsed, 1)
             metrics["frame_index"] = frame_index
-            with state_lock:
-                cur_input = state["input_shm"]
-            metrics["inputs_latency_ms"] = {{cur_input: lat_in.avg()}} if cur_input else {{}}
+            metrics["inputs_latency_ms"] = {{in_name: lat_in.avg()}} if in_name else {{}}
