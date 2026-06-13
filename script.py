@@ -114,7 +114,8 @@ DEFAULT_PARAMS = {{
     "gamma_r":    1.0,   # 0.1..10
     "gamma_g":    1.0,
     "gamma_b":    1.0,
-    # Glow / bloom : diffusion lumineuse des hautes lumières (luma only)
+    # Glow / bloom : diffusion lumineuse des hautes lumières (luma only) — APPLIQUÉ EN DERNIER.
+    "glow_enabled": 1.0, # bouton on/off (0 = glow désactivé même si intensité > 0)
     "glow":        0.0,  # 0..2 intensité (0 = désactivé)
     "glow_thresh": 0.7,  # 0..1 seuil hautes lumières (fraction de la plage)
     "glow_radius": 8.0,  # 1..64 rayon de diffusion (px, plein écran)
@@ -340,33 +341,67 @@ def _apply_glow(y, intensity, thresh, radius, lyt):
     up = (small * intensity).repeat(ds, 0).repeat(ds, 1)[:H, :W]
     return np.clip(y.astype(np.float32) + up, 0, maxf).astype(np_dt)
 
+_CB_KEYS = ("cb_rs", "cb_gs", "cb_bs", "cb_rm", "cb_gm", "cb_bm", "cb_rh", "cb_gh", "cb_bh")
+
+def _is_neutral(p):
+    """True si AUCUNE correction n'est active (identité) → passthrough sans aucune passe numpy."""
+    return (p["brightness"] == 0.0 and p["contrast"] == 1.0 and p["saturation"] == 1.0 and
+            p["gamma"] == 1.0 and p["hue"] == 0.0 and
+            p["gamma_r"] == 1.0 and p["gamma_g"] == 1.0 and p["gamma_b"] == 1.0 and
+            not (p.get("glow_enabled", 1.0) and p["glow"] > 0.0) and
+            all(p[k] == 0.0 for k in _CB_KEYS))
+
+# LUT Y (luminosité+contraste+gamma) cachée : recalculée SEULEMENT au changement de params.
+# Une op par-pixel d'un seul canal = une table → 1 gather au lieu de passes float + np.power/pixel.
+_lut_y_cache = {{"key": None, "lut": None}}
+
+def _get_lut_y(p, lyt):
+    """LUT Y appliquant luminosité→contraste→gamma (bit-exact vs l'ancien float→quantize), ou None
+    si le domaine Y est l'identité (rien à faire)."""
+    if p["brightness"] == 0.0 and p["contrast"] == 1.0 and p["gamma"] == 1.0:
+        return None
+    neutf = lyt["neutf"]; maxf = lyt["maxf"]; np_dt = lyt["np_dt"]
+    key = (p["brightness"], p["contrast"], p["gamma"], maxf, neutf)
+    c = _lut_y_cache
+    if c["key"] == key:
+        return c["lut"]
+    vf = np.arange(int(maxf) + 1, dtype=np.float32)
+    if p["brightness"] != 0.0:
+        vf = vf + p["brightness"] * neutf
+    if p["contrast"] != 1.0:
+        vf = (vf - neutf) * p["contrast"] + neutf
+    if p["gamma"] != 1.0 and p["gamma"] > 0:
+        yn = np.clip(vf, 0, maxf) / maxf
+        vf = np.power(yn, 1.0 / p["gamma"]) * maxf
+    c["key"] = key
+    c["lut"] = np.clip(vf, 0, maxf).astype(np_dt)
+    return c["lut"]
+
 def appliquer_correction(yuv_bytes, p, lyt):
     """Applique les params de correction. Renvoie yuv bytes."""
+    # IDENTITÉ → passthrough : aucune passe numpy quand rien n'est réglé.
+    if _is_neutral(p):
+        return yuv_bytes
     neutf = lyt["neutf"]; maxf = lyt["maxf"]; np_dt = lyt["np_dt"]
     y, u, v = split_yuv(yuv_bytes, lyt)
 
-    yf = y.astype(np.float32)
-    uf = u.astype(np.float32) - neutf
-    vf = v.astype(np.float32) - neutf
+    # Domaine Y (luminosité/contraste/gamma) : un seul gather via LUT cachée (plus de float ni np.power).
+    lut_y = _get_lut_y(p, lyt)
+    if lut_y is not None:
+        y = lut_y[y]
 
-    if p["brightness"] != 0.0:
-        yf = yf + p["brightness"] * neutf
-    if p["contrast"] != 1.0:
-        yf = (yf - neutf) * p["contrast"] + neutf
-    if p["saturation"] != 1.0:
-        uf = uf * p["saturation"]
-        vf = vf * p["saturation"]
-    if p["gamma"] != 1.0 and p["gamma"] > 0:
-        yn = np.clip(yf, 0, maxf) / maxf
-        yf = np.power(yn, 1.0 / p["gamma"]) * maxf
-    if p["hue"] != 0.0:
-        rad = p["hue"] * np.pi / 180.0
-        cs, sn = np.cos(rad), np.sin(rad)
-        uf, vf = uf * cs - vf * sn, uf * sn + vf * cs
-
-    y = np.clip(yf, 0, maxf).astype(np_dt)
-    u = np.clip(uf + neutf, 0, maxf).astype(np_dt)
-    v = np.clip(vf + neutf, 0, maxf).astype(np_dt)
+    # Chroma (saturation/teinte) : float sur U/V (petits) UNIQUEMENT si actif.
+    if p["saturation"] != 1.0 or p["hue"] != 0.0:
+        uf = u.astype(np.float32) - neutf
+        vf = v.astype(np.float32) - neutf
+        if p["saturation"] != 1.0:
+            uf = uf * p["saturation"]; vf = vf * p["saturation"]
+        if p["hue"] != 0.0:
+            rad = p["hue"] * np.pi / 180.0
+            cs, sn = np.cos(rad), np.sin(rad)
+            uf, vf = uf * cs - vf * sn, uf * sn + vf * cs
+        u = np.clip(uf + neutf, 0, maxf).astype(np_dt)
+        v = np.clip(vf + neutf, 0, maxf).astype(np_dt)
 
     need_rgb = (
         p["gamma_r"] != 1.0 or p["gamma_g"] != 1.0 or p["gamma_b"] != 1.0 or
@@ -396,7 +431,8 @@ def appliquer_correction(yuv_bytes, p, lyt):
         np.clip(rgb, 0, 255, out=rgb)
         y, u, v = rgb_to_yuv(rgb, lyt)
 
-    if p["glow"] > 0.0:
+    # Glow EN DERNIER (sur le Y final), uniquement si activé (bouton) ET intensité > 0.
+    if p.get("glow_enabled", 1.0) and p["glow"] > 0.0:
         y = _apply_glow(y, p["glow"], p["glow_thresh"], p["glow_radius"], lyt)
 
     return join_yuv(y, u, v)

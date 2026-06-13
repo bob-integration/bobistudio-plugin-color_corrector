@@ -1,7 +1,13 @@
 {
-  "version": "0.5.3",
+  "version": "0.5.4",
   "date": "2026-06-13",
   "changes": {
+    "Performance (0.5.4)": [
+      "Pipeline de correction ~2-3× plus rapide pour tenir le 1080p50 EN TRAITANT. Avant, appliquer_correction faisait un roundtrip YUV↔float32 plein trame inconditionnel (~10 passes) même params neutres (own ~14 ms → ~45 fps), et le gamma utilisait np.power par-pixel sur 2 M pixels. Désormais : (1) chemin IDENTITÉ → passthrough (réémission de la trame d'entrée, ~0 passe) quand rien n'est réglé ; (2) domaine Y (luminosité+contraste+gamma) appliqué via une LUT cachée (256/1024/4096 entrées, recalculée seulement au changement de params) en UN seul gather — plus de float ni de np.power par-pixel ; (3) chroma (saturation/teinte) en float seulement si actif. Résultat bit-exact vs l'ancien rendu (vérifié 8 et 10 bits). La branche RGB (gamma R/G/B + color balance) garde son roundtrip, uniquement quand utilisée."
+    ],
+    "Nouveautés (0.5.4)": [
+      "Glow : bouton on/off (glow_enabled) dans la section « Glow / Bloom » — désactive l'effet sans perdre le réglage d'intensité. La section Glow passe EN DERNIER dans le panneau avancé (après Color Balance), cohérent avec le pipeline où le glow est la dernière étape appliquée."
+    ],
     "Corrections (0.5.3)": [
       "Crash « script stoppé » au câblage d'une source corrigé : color_corrector supposait un ring de 10 pour l'ENTRÉE (V_RING_SIZE, son ring de SORTIE), alors qu'un producteur RX 2110_io est en ring 8. Lus en ring 10, les slots 8/9 débordaient le shm → lecture tronquée (ex. 4032 octets) → np.reshape(1080,1920) lève ValueError → exception non rattrapée → mort du script. Fix : (1) ring_r de l'entrée DÉRIVÉ de la taille réelle du shm producteur ((taille−64)//fr_sz) au lieu du ring de sortie figé ; (2) lire_frame_yuv ignore une lecture tronquée (len < fr_sz → trame sautée → image noire de repli) au lieu de la passer à split_yuv. Le script ne meurt plus jamais sur un mismatch ring/format d'entrée. cf. mxl-consumer-format-contract."
     ],

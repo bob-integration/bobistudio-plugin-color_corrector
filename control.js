@@ -196,16 +196,20 @@ window.MXLPlugins.color_corrector = (function () {
         const presetsOpts=['<option value="">— Sélectionner un preset —</option>']
             .concat(presets.map(pr=>`<option value="${pr.id}">${esc(pr.name)}</option>`)).join('');
         const basicHtml=`<div class="cc-knob-row">${BASIC.map(pp=>knobHtml(pp,p[pp.key],def[pp.key]??pp.def)).join('')}</div>`;
+        const glowOn = ((p.glow_enabled ?? def.glow_enabled ?? 1) != 0);
         const advHtml=!advanced?'':`<div id="cc-adv-section">
             <div class="cc-section"><h4>Gamma par canal</h4>
                 <div class="cc-knob-row">${ADV.map(pp=>knobHtml(pp,p[pp.key],def[pp.key]??pp.def)).join('')}</div></div>
-            <div class="cc-section"><h4>Glow / Bloom</h4>
-                <div class="cc-knob-row">${GLOW.map(pp=>knobHtml(pp,p[pp.key],def[pp.key]??pp.def)).join('')}</div></div>
             <div class="cc-section"><h4>Color Balance</h4><div class="cc-cb-grid">
                 ${CB_ZONES.map(z=>`<div class="cc-cb-zone"><h5>${z.label}</h5><div class="cc-knob-row cc-knob-row-tight">
                     ${CB_AXES.map(ax=>{const key=`cb_${ax.key}${z.key}`; return knobHtml({key,label:ax.short,min:-1,max:1,step:0.01,def:0,unit:""}, p[key], 0);}).join('')}
                 </div></div>`).join('')}
-            </div></div></div>`;
+            </div></div>
+            <div class="cc-section"><h4>Glow / Bloom
+                <button type="button" class="cc-glow-toggle ${glowOn?'is-on':''}" role="switch"
+                        aria-checked="${glowOn?'true':'false'}" onclick="__cc.toggleGlow()">${glowOn?'Activé':'Désactivé'}</button></h4>
+                <div class="cc-knob-row ${glowOn?'':'cc-glow-off'}">${GLOW.map(pp=>knobHtml(pp,p[pp.key],def[pp.key]??pp.def)).join('')}</div></div>
+            </div>`;
         const saveBlock=saveOpen?`<div class="cc-inline-prompt" role="group" aria-label="Enregistrer le preset">
             <label for="cc-preset-name" style="font-size:0.88em">Nom :</label>
             <input id="cc-preset-name" type="text" placeholder="Mon preset"
@@ -242,6 +246,10 @@ window.MXLPlugins.color_corrector = (function () {
     }
 
     function toggleAdvanced(on){ advanced=on; render(); }
+    function toggleGlow(){
+        const cur=(state&&state.params&&state.params.glow_enabled!=null)?state.params.glow_enabled:1;
+        postParams({glow_enabled:(cur!=0)?0:1});
+    }
     function cancelPending(){ pending=null; render(); }
 
     async function postParams(patch){
@@ -304,7 +312,7 @@ window.MXLPlugins.color_corrector = (function () {
     function unmount(){ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } EL=null; VMID=null; }
 
     const exp = {mount, unmount, clearError, knobDown, knobReset, knobWheel, knobKey,
-        knobNumberInput, knobNumberCommit, toggleAdvanced, cancelPending, applyWire,
+        knobNumberInput, knobNumberCommit, toggleAdvanced, toggleGlow, cancelPending, applyWire,
         loadPreset, savePresetOpen, savePresetCancel, savePresetConfirm,
         deletePresetAsk, deletePresetConfirm, resetAllAsk, resetAllConfirm};
     window.__cc = exp;   // raccourci pour les handlers inline du fragment
