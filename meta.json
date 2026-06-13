@@ -1,7 +1,10 @@
 {
-  "version": "0.5.2",
+  "version": "0.5.3",
   "date": "2026-06-13",
   "changes": {
+    "Corrections (0.5.3)": [
+      "Crash « script stoppé » au câblage d'une source corrigé : color_corrector supposait un ring de 10 pour l'ENTRÉE (V_RING_SIZE, son ring de SORTIE), alors qu'un producteur RX 2110_io est en ring 8. Lus en ring 10, les slots 8/9 débordaient le shm → lecture tronquée (ex. 4032 octets) → np.reshape(1080,1920) lève ValueError → exception non rattrapée → mort du script. Fix : (1) ring_r de l'entrée DÉRIVÉ de la taille réelle du shm producteur ((taille−64)//fr_sz) au lieu du ring de sortie figé ; (2) lire_frame_yuv ignore une lecture tronquée (len < fr_sz → trame sautée → image noire de repli) au lieu de la passer à split_yuv. Le script ne meurt plus jamais sur un mismatch ring/format d'entrée. cf. mxl-consumer-format-contract."
+    ],
     "Nouveautés (0.5.2)": [
       "Latence page Câbles : inputs_latency_ms mesuré À LA LECTURE (transit = ts_read − ts_in producteur, sous-trame) au lieu de ts_out − ts_in. Nouveau own_latency_ms (:8080) = ts_out − ts_read = temps de correction propre. Permet de suivre la latence étape par étape le long de la chaîne (arête = arrivée, nœud = traitement)."
     ],

@@ -270,7 +270,10 @@ def lire_frame_yuv(shm, lyt):
         if frame_index == 0: return None, None
         slot   = frame_index % lyt["ring_r"]
         offset = V_HEADER_SIZE + slot * lyt["fr_sz"]
-        return bytes(shm[offset:offset + lyt["fr_sz"]]), ts_in
+        data   = bytes(shm[offset:offset + lyt["fr_sz"]])
+        if len(data) < lyt["fr_sz"]:
+            return None, None   # lecture TRONQUÉE (ring/format mismatch) → trame ignorée, JAMAIS de crash
+        return data, ts_in
     except Exception:
         return None, None
 
@@ -479,8 +482,14 @@ while True:
     # Reconfigurer le shm de sortie si le format a changé
     if cur_lyt is None or cur_lyt["total"] != new_lyt["total"]:
         cur_lyt = new_lyt
-        # Ajoute ring_r (ring size de l'entrée = convention globale V_RING_SIZE)
-        cur_lyt["ring_r"] = V_RING_SIZE
+        # ring_r de l'ENTRÉE = DÉRIVÉ de la taille RÉELLE du shm producteur (PAS le ring de sortie).
+        # Un producteur en ring 8 (RX 2110_io) lu en supposant ring 10 → l'offset des slots 8/9
+        # déborde le shm → lecture tronquée → reshape crash. cf. mxl-consumer-format-contract.
+        try:
+            _in_sz = os.path.getsize(f"/dev/shm/{{in_name}}")
+            cur_lyt["ring_r"] = max(1, (_in_sz - V_HEADER_SIZE) // cur_lyt["fr_sz"])
+        except Exception:
+            cur_lyt["ring_r"] = V_RING_SIZE
         _ouvrir_sortie(cur_lyt["total"])
         last_in_idx = 0
         frame_index = 0
