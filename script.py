@@ -530,12 +530,14 @@ while True:
         last_in_idx = 0
         frame_index = 0
         start = time.time(); next_t = start; last_black = start
+        # Trame noire de repli CACHÉE (4 Mo) : calculée UNE fois au changement de format au lieu
+        # d'être reconstruite à chaque itération de la boucle (gaspillage CPU dans l'attente d'entrée).
+        empty_frame = (b"\x10" * cur_lyt["y_sz"] +
+                       b"\x80" * (2 * cur_lyt["uv_sz"]))
         print(f"format: {{cur_lyt['width']}}x{{cur_lyt['height']}} chroma={{cur_lyt['chroma']}}")
 
     fps      = cur_lyt["fps"]
     interval = 1.0 / fps
-    empty_frame = (b"\x10" * cur_lyt["y_sz"] +
-                   b"\x80" * (2 * cur_lyt["uv_sz"]))
 
     if GENLOCK:
         idx_in = _in_index(shm_in)
