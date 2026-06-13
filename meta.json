@@ -1,7 +1,10 @@
 {
-  "version": "0.5.4",
+  "version": "0.5.5",
   "date": "2026-06-13",
   "changes": {
+    "Corrections (0.5.5)": [
+      "Bascule on/off du Glow : passe en ios-toggle (style switch global, conforme au reste de l'UI) au lieu d'un bouton custom, et son état se met à jour IMMÉDIATEMENT au clic (MAJ optimiste de l'état local + re-render) — plus besoin de recharger la page."
+    ],
     "Performance (0.5.4)": [
       "Pipeline de correction ~2-3× plus rapide pour tenir le 1080p50 EN TRAITANT. Avant, appliquer_correction faisait un roundtrip YUV↔float32 plein trame inconditionnel (~10 passes) même params neutres (own ~14 ms → ~45 fps), et le gamma utilisait np.power par-pixel sur 2 M pixels. Désormais : (1) chemin IDENTITÉ → passthrough (réémission de la trame d'entrée, ~0 passe) quand rien n'est réglé ; (2) domaine Y (luminosité+contraste+gamma) appliqué via une LUT cachée (256/1024/4096 entrées, recalculée seulement au changement de params) en UN seul gather — plus de float ni de np.power par-pixel ; (3) chroma (saturation/teinte) en float seulement si actif. Résultat bit-exact vs l'ancien rendu (vérifié 8 et 10 bits). La branche RGB (gamma R/G/B + color balance) garde son roundtrip, uniquement quand utilisée."
     ],

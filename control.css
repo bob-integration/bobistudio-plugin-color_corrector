@@ -106,13 +106,6 @@
 }
 @media (max-width: 720px) { .cc-cb-grid { grid-template-columns:1fr; } }
 
-/* Bouton on/off du Glow (dans le titre de section) + atténuation des réglages quand off. */
-.cc-glow-toggle {
-    margin-left:10px; padding:2px 10px; font-size:0.8em; cursor:pointer;
-    border:1px solid var(--border); border-radius:10px;
-    background:var(--bg-input); color:var(--text-muted); vertical-align:middle;
-}
-.cc-glow-toggle.is-on {
-    border-color:var(--accent); color:var(--accent); font-weight:600;
-}
+/* Bascule on/off du Glow (ios-toggle global) dans le titre de section + atténuation quand off. */
+.cc-glow-switch { margin-left:10px; vertical-align:middle; display:inline-flex; }
 .cc-knob-row.cc-glow-off { opacity:0.4; }

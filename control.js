@@ -206,8 +206,8 @@ window.MXLPlugins.color_corrector = (function () {
                 </div></div>`).join('')}
             </div></div>
             <div class="cc-section"><h4>Glow / Bloom
-                <button type="button" class="cc-glow-toggle ${glowOn?'is-on':''}" role="switch"
-                        aria-checked="${glowOn?'true':'false'}" onclick="__cc.toggleGlow()">${glowOn?'Activé':'Désactivé'}</button></h4>
+                <label class="cc-glow-switch"><input type="checkbox" class="ios-toggle" ${glowOn?'checked':''}
+                       aria-label="Activer le glow" onchange="__cc.setGlow(this.checked)"></label></h4>
                 <div class="cc-knob-row ${glowOn?'':'cc-glow-off'}">${GLOW.map(pp=>knobHtml(pp,p[pp.key],def[pp.key]??pp.def)).join('')}</div></div>
             </div>`;
         const saveBlock=saveOpen?`<div class="cc-inline-prompt" role="group" aria-label="Enregistrer le preset">
@@ -246,9 +246,12 @@ window.MXLPlugins.color_corrector = (function () {
     }
 
     function toggleAdvanced(on){ advanced=on; render(); }
-    function toggleGlow(){
-        const cur=(state&&state.params&&state.params.glow_enabled!=null)?state.params.glow_enabled:1;
-        postParams({glow_enabled:(cur!=0)?0:1});
+    function setGlow(on){
+        // MAJ optimiste de l'état local + re-render → la bascule reflète immédiatement (sans
+        // attendre le poll 3 s ni recharger la page), et la zone des réglages glow se grise/dégrise.
+        if(state&&state.params){ state.params.glow_enabled = on?1:0; }
+        postParams({glow_enabled: on?1:0});
+        render();
     }
     function cancelPending(){ pending=null; render(); }
 
@@ -312,7 +315,7 @@ window.MXLPlugins.color_corrector = (function () {
     function unmount(){ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } EL=null; VMID=null; }
 
     const exp = {mount, unmount, clearError, knobDown, knobReset, knobWheel, knobKey,
-        knobNumberInput, knobNumberCommit, toggleAdvanced, toggleGlow, cancelPending, applyWire,
+        knobNumberInput, knobNumberCommit, toggleAdvanced, setGlow, cancelPending, applyWire,
         loadPreset, savePresetOpen, savePresetCancel, savePresetConfirm,
         deletePresetAsk, deletePresetConfirm, resetAllAsk, resetAllConfirm};
     window.__cc = exp;   // raccourci pour les handlers inline du fragment
