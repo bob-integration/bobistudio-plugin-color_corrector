@@ -1,7 +1,10 @@
 {
-  "version": "0.5.1",
-  "date": "2026-06-08",
+  "version": "0.5.2",
+  "date": "2026-06-13",
   "changes": {
+    "Nouveautés (0.5.2)": [
+      "Latence page Câbles : inputs_latency_ms mesuré À LA LECTURE (transit = ts_read − ts_in producteur, sous-trame) au lieu de ts_out − ts_in. Nouveau own_latency_ms (:8080) = ts_out − ts_read = temps de correction propre. Permet de suivre la latence étape par étape le long de la chaîne (arête = arrivée, nœud = traitement)."
+    ],
     "Nouveautés": [
       "Format adaptatif (video_format:false) : WIDTH/HEIGHT/FPS/CHROMA/BIT_DEPTH ne sont plus des constantes de déploiement. Le format est injecté par l'orchestrateur au câblage (POST /input {format:…}) ou déduit de la taille du shm d'entrée (heuristique 16:9). Le shm de sortie est recréé si le format change. Plus de champs format dans la palette de création."
     ],

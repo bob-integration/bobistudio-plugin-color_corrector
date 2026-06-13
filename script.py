@@ -32,7 +32,8 @@ class RollingMs:
         if time.time_ns() - self.last_ns > 2_000_000_000: return None
         return round(sum(self.d) / len(self.d), 1)
 
-lat_in = RollingMs()
+lat_in  = RollingMs()   # TRANSIT (ts_read − ts_in producteur) = arrivée
+own_lat = RollingMs()   # traitement PROPRE du nœud (ts_out − ts_read) → own_latency_ms
 
 # ─── Config injectée (contrat plugin) ───────────────────────
 CONFIG         = {config}
@@ -142,7 +143,7 @@ state = {{
 
 # Métriques
 metrics_lock = threading.Lock()
-metrics = {{"fps": 0.0, "frame_index": 0, "inputs_latency_ms": {{}}, "plugin_version": PLUGIN_VERSION}}
+metrics = {{"fps": 0.0, "frame_index": 0, "inputs_latency_ms": {{}}, "own_latency_ms": None, "plugin_version": PLUGIN_VERSION}}
 
 # SIGBUS
 bus_error = threading.Event()
@@ -510,6 +511,7 @@ while True:
     with state_lock:
         params = dict(state["params"])
 
+    ts_cycle_start = time.time_ns()   # instant de LECTURE (après pacing) → base transit/own
     in_yuv, ts_in = lire_frame_yuv(shm_in, cur_lyt)
     if in_yuv:
         out_yuv = appliquer_correction(in_yuv, params, cur_lyt)
@@ -518,7 +520,8 @@ while True:
     _ecrire(out_yuv, frame_index, cur_lyt)
     ts_out = time.time_ns()
     if in_yuv and ts_in:
-        lat_in.push((ts_out - ts_in) / 1e6)
+        lat_in.push((ts_cycle_start - ts_in) / 1e6)   # TRANSIT (arrivée) = âge à la lecture
+    own_lat.push((ts_out - ts_cycle_start) / 1e6)      # traitement PROPRE (correction)
     frame_index += 1
     if not GENLOCK:
         next_t = start + frame_index * interval
@@ -529,3 +532,4 @@ while True:
             metrics["fps"] = round(frame_index / elapsed, 1)
             metrics["frame_index"] = frame_index
             metrics["inputs_latency_ms"] = {{in_name: lat_in.avg()}} if in_name else {{}}
+            metrics["own_latency_ms"] = own_lat.avg()
