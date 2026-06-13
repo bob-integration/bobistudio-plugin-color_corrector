@@ -377,6 +377,35 @@ def _get_lut_y(p, lyt):
     c["lut"] = np.clip(vf, 0, maxf).astype(np_dt)
     return c["lut"]
 
+# LUTs de COLOR BALANCE en domaine YUV (cachées). Le balance ajoute un offset RGB pondéré par la
+# luma (zones shadow/mid/high) ; la luma = Y (le chroma s'annule dans la conversion) → l'offset
+# YUV (dy/du/dv) est une FONCTION DE Y SEUL → 3 LUTs au lieu du roundtrip yuv↔rgb (qui en plus
+# distordait l'image, ~Y±12). Le gamma R/G/B (non-linéaire) garde son roundtrip RGB, lui.
+_lut_cb_cache = {{"key": None, "luts": None}}
+
+def _get_lut_cb(p, lyt):
+    """(dy,du,dv) float32 indexées par Y, ou None si aucun cb actif."""
+    cbv = tuple(p[k] for k in _CB_KEYS)
+    if not any(cbv):
+        return None
+    sc = lyt["scale"]; maxf = lyt["maxf"]
+    key = (cbv, sc, maxf)
+    c = _lut_cb_cache
+    if c["key"] == key:
+        return c["luts"]
+    v = np.arange(int(maxf) + 1, dtype=np.float32)
+    L = np.clip(1.164 * (v / sc - 16.0) / 255.0, 0.0, 1.0)   # luma normalisée (= L de l'ancien rgb)
+    sw = np.clip(1.0 - 2.0 * L, 0.0, 1.0); hw = np.clip(2.0 * L - 1.0, 0.0, 1.0); mw = 1.0 - sw - hw
+    dr = (sw * p["cb_rs"] + mw * p["cb_rm"] + hw * p["cb_rh"]) * 128.0
+    dg = (sw * p["cb_gs"] + mw * p["cb_gm"] + hw * p["cb_gh"]) * 128.0
+    db = (sw * p["cb_bs"] + mw * p["cb_bm"] + hw * p["cb_bh"]) * 128.0
+    dy = ( 0.257 * dr + 0.504 * dg + 0.098 * db) * sc
+    du = (-0.148 * dr - 0.291 * dg + 0.439 * db) * sc
+    dv = ( 0.439 * dr - 0.368 * dg - 0.071 * db) * sc
+    c["key"] = key
+    c["luts"] = (dy, du, dv)
+    return c["luts"]
+
 def appliquer_correction(yuv_bytes, p, lyt):
     """Applique les params de correction. Renvoie yuv bytes."""
     # IDENTITÉ → passthrough : aucune passe numpy quand rien n'est réglé.
@@ -403,11 +432,8 @@ def appliquer_correction(yuv_bytes, p, lyt):
         u = np.clip(uf + neutf, 0, maxf).astype(np_dt)
         v = np.clip(vf + neutf, 0, maxf).astype(np_dt)
 
-    need_rgb = (
-        p["gamma_r"] != 1.0 or p["gamma_g"] != 1.0 or p["gamma_b"] != 1.0 or
-        any(p[k] != 0.0 for k in
-            ("cb_rs","cb_gs","cb_bs","cb_rm","cb_gm","cb_bm","cb_rh","cb_gh","cb_bh"))
-    )
+    # Gamma par-canal R/G/B = NON-linéaire → roundtrip RGB obligatoire (+ color balance fait dedans).
+    need_rgb = p["gamma_r"] != 1.0 or p["gamma_g"] != 1.0 or p["gamma_b"] != 1.0
     if need_rgb:
         rgb = yuv_to_rgb(y, u, v, lyt)
         if p["gamma_r"] != 1.0 and p["gamma_r"] > 0:
@@ -416,8 +442,7 @@ def appliquer_correction(yuv_bytes, p, lyt):
             rgb[:,:,1] = np.power(rgb[:,:,1] / 255.0, 1.0 / p["gamma_g"]) * 255.0
         if p["gamma_b"] != 1.0 and p["gamma_b"] > 0:
             rgb[:,:,2] = np.power(rgb[:,:,2] / 255.0, 1.0 / p["gamma_b"]) * 255.0
-        if any(p[k] != 0.0 for k in
-               ("cb_rs","cb_gs","cb_bs","cb_rm","cb_gm","cb_bm","cb_rh","cb_gh","cb_bh")):
+        if any(p[k] != 0.0 for k in _CB_KEYS):
             L = (0.299*rgb[:,:,0] + 0.587*rgb[:,:,1] + 0.114*rgb[:,:,2]) / 255.0
             shadow_w = np.clip((1.0 - L*2.0), 0.0, 1.0)
             hi_w     = np.clip((L*2.0 - 1.0), 0.0, 1.0)
@@ -430,6 +455,15 @@ def appliquer_correction(yuv_bytes, p, lyt):
                 rgb[:,:,idx] = rgb[:,:,idx] + off
         np.clip(rgb, 0, 255, out=rgb)
         y, u, v = rgb_to_yuv(rgb, lyt)
+    else:
+        # Color balance SANS gamma RGB → domaine YUV via LUTs(Y) (pas de roundtrip RGB).
+        cb_luts = _get_lut_cb(p, lyt)
+        if cb_luts is not None:
+            dy, du, dv = cb_luts
+            ys = y[::lyt["ch"], ::lyt["cw"]]          # Y aux positions chroma
+            y = np.clip(y.astype(np.float32) + dy[y],  0, maxf).astype(np_dt)
+            u = np.clip(u.astype(np.float32) + du[ys], 0, maxf).astype(np_dt)
+            v = np.clip(v.astype(np.float32) + dv[ys], 0, maxf).astype(np_dt)
 
     # Glow EN DERNIER (sur le Y final), uniquement si activé (bouton) ET intensité > 0.
     if p.get("glow_enabled", 1.0) and p["glow"] > 0.0:
