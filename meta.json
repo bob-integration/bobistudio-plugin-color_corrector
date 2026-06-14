@@ -1,7 +1,10 @@
 {
-  "version": "0.5.7",
-  "date": "2026-06-13",
+  "version": "0.5.8",
+  "date": "2026-06-14",
   "changes": {
+    "Corrections (0.5.8)": [
+      "fps en fenêtre glissante (delta de frame_index depuis le dernier report) au lieu d'une moyenne cumulée depuis le démarrage → la valeur reflète le débit réel instantané (uniformisé avec multiview/pyramide)."
+    ],
     "Performance (0.5.7)": [
       "Color balance ~10× plus rapide (sans roundtrip RGB) + correction d'un artefact. Le color balance ajoute un offset RGB pondéré par la luma ; comme la luma = Y (le chroma s'annule dans la conversion), cet offset YUV (dy/du/dv) est une FONCTION DE Y SEUL → 3 LUTs cachées appliquées directement en YUV au lieu d'un roundtrip yuv↔rgb (~62 → ~quelques ms). Bonus : l'ancien roundtrip n'était PAS neutre (il distordait l'image de ~Y±12 / U±17 par clipping RGB des couleurs hors-gamut) — le chemin YUV supprime cette distorsion. Sur contenu broadcast légal le rendu est identique ; il ne diffère que sur les couleurs hors-gamut/sursaturées (où l'ancien clippait en RGB). Le gamma par-canal R/G/B (non-linéaire) garde son roundtrip RGB obligatoire ; quand il est actif, le color balance reste fait dans ce roundtrip."
     ],

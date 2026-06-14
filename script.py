@@ -507,6 +507,8 @@ last_in_idx = 0
 start       = time.time()
 next_t      = start
 last_black  = start
+_fps_last_idx = 0          # fps en fenêtre glissante (delta depuis le dernier report)
+_fps_last_t   = start
 
 while True:
     if bus_error.is_set():
@@ -608,9 +610,11 @@ while True:
         next_t = start + frame_index * interval
 
     if frame_index % max(1, fps) == 0:
-        elapsed = time.time() - start
+        _now = time.time(); _dt = _now - _fps_last_t
         with metrics_lock:
-            metrics["fps"] = round(frame_index / elapsed, 1)
+            if _dt > 0 and frame_index >= _fps_last_idx:
+                metrics["fps"] = round((frame_index - _fps_last_idx) / _dt, 1)
+            _fps_last_idx = frame_index; _fps_last_t = _now
             metrics["frame_index"] = frame_index
             metrics["inputs_latency_ms"] = {{in_name: lat_in.avg()}} if in_name else {{}}
             metrics["own_latency_ms"] = own_lat.avg()
