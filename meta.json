@@ -1,7 +1,12 @@
 {
-  "version": "0.5.8",
-  "date": "2026-06-14",
+  "version": "0.6.0",
+  "date": "2026-06-21",
   "changes": {
+    "Nouveautés (0.6.0)": [
+      "Migration MXL (Phase 1, sans double-écriture) : entrée = bobimxl.Reader, sortie = bobimxl.Writer (flux planar video/x-mxl-planar), zéro-copie, ring/horodatage gérés par libmxl. Genlock par PROPAGATION : le grain de sortie reprend l'index du grain d'entrée. Requiert l'image bobi-compute >= 0.5 (bobimxl avec Reader.format()/flow_def).",
+      "Format LU DU flow_def du flux d'entrée (source de vérité côté donnée, écrite par le producteur → ne peut pas diverger des octets) au lieu de l'heuristique _detect_fmt ou du hint orchestrateur. Supprime la classe de bugs vert/fantôme/figé (dérive DB↔octets). Le format injecté par POST /input ne sert plus qu'au gating UX.",
+      "Latence transit (inputs_latency_ms) calculée en horloge TAI (now_tai - flow.lastWriteTime) ; own_latency_ms inchangée. Résilience : flux d'entrée recréé → Reader re-créé sans crash."
+    ],
     "Corrections (0.5.8)": [
       "fps en fenêtre glissante (delta de frame_index depuis le dernier report) au lieu d'une moyenne cumulée depuis le démarrage → la valeur reflète le débit réel instantané (uniformisé avec multiview/pyramide)."
     ],

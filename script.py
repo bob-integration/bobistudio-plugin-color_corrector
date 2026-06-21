@@ -9,16 +9,18 @@
 #   Entrée  : input_shm (câblable à chaud, mode hot-wire)
 #   Sortie  : {hostname}_cc
 #
-# Format adaptatif : WIDTH/HEIGHT/FPS/CHROMA/BIT_DEPTH sont détectés à la
-# connexion du câble (format injecté par l'orchestrateur via POST /input, ou
-# déduit de la taille du shm d'entrée avec heuristique 16:9).
+# MIGRÉ MXL (Phase 1, sans double-écriture) : entrée = bobimxl.Reader, sortie = bobimxl.Writer.
+# Format adaptatif : WIDTH/HEIGHT/FPS/CHROMA/BIT_DEPTH sont LUS DU flow_def du flux MXL d'entrée
+# (source de vérité CÔTÉ DONNÉE, écrite par le producteur → ne peut pas diverger des octets). Le
+# format injecté par l'orchestrateur (POST /input) ne sert plus qu'au gating UX (ignoré ici).
 #
 # Template str.format : SEULS {config} / {hostname} / {plugin_version} sont des
 # placeholders. TOUTE autre accolade littérale doit être doublée {{ }}.
 # ─────────────────────────────────────────────────────────────────────────────
-import mmap, struct, time, threading, json, os, signal, math
+import time, threading, json, os, signal
 from collections import deque
 import numpy as np
+import bobimxl
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # ─── Latence : Δ ts_output - ts_input (rolling avg) ────────────
@@ -46,15 +48,13 @@ GENLOCK           = _gl if isinstance(_gl, bool) else str(_gl).strip().lower() i
 INITIAL_INPUT_SHM = (CONFIG.get("input_shm") or None)
 INITIAL_PARAMS    = CONFIG.get("cc_params") or {{}}
 
-V_HEADER_SIZE = 64
-V_RING_SIZE   = 10
 _RGBMAX = 255.0
 
 
 # ─── Layout YUV : calculé à partir du format détecté/injecté ───
 
-def _make_layout(w, h, chroma="422", bit_depth=8, fps=25):
-    """Calcule tous les dérivés de format nécessaires au traitement."""
+def _make_layout(w, h, chroma="422", bit_depth=8, fps_num=25, fps_den=1):
+    """Calcule tous les dérivés de format nécessaires au traitement (MXL gère le ring)."""
     w -= w % 2; h -= h % 2
     deep  = bit_depth >= 10
     bps   = 2 if deep else 1
@@ -65,43 +65,17 @@ def _make_layout(w, h, chroma="422", bit_depth=8, fps=25):
     y_sz  = w * h * bps
     uv_sz = uv_w * uv_h * bps
     fr_sz = y_sz + 2 * uv_sz
-    total = V_HEADER_SIZE + V_RING_SIZE * fr_sz
     return dict(
-        width=w, height=h, chroma=chroma, bit_depth=bit_depth, fps=fps,
+        width=w, height=h, chroma=chroma, bit_depth=bit_depth,
+        fps_num=int(fps_num), fps_den=int(fps_den), fps=max(1, round(fps_num / fps_den)),
         deep=deep, bps=bps, np_dt=np_dt,
         scale=1 << (bit_depth - 8),
         neutf=float(1 << (bit_depth - 1)),
         blackf=float(16 << (bit_depth - 8)),
         maxf=float((1 << bit_depth) - 1),
         cw=cw, ch=ch, uv_w=uv_w, uv_h=uv_h,
-        y_sz=y_sz, uv_sz=uv_sz, fr_sz=fr_sz, total=total,
+        y_sz=y_sz, uv_sz=uv_sz, fr_sz=fr_sz,
     )
-
-def _detect_fmt(path):
-    """Déduit W×H depuis la taille du fichier shm (ring=10 header=64).
-    Essaie d'abord YUV422 8-bit puis YUV420 8-bit, ratio 16:9."""
-    try:
-        sz = os.path.getsize(path)
-    except OSError:
-        return None
-    fs = (sz - V_HEADER_SIZE) // V_RING_SIZE
-    if fs <= 0:
-        return None
-    # YUV422 8bit : frame = w*h*2 ; ratio 16:9 → fs = 288*k²
-    k2 = fs / 288.0
-    k  = math.isqrt(int(k2))
-    for kk in (k, k + 1):
-        w, h = kk * 16, kk * 9
-        if w > 0 and w * h * 2 == fs:
-            return {{"width": w, "height": h, "chroma": "422", "bit_depth": 8}}
-    # YUV420 8bit : frame = w*h*3//2 ; ratio 16:9 → fs = 216*k²
-    k2 = fs / 216.0
-    k  = math.isqrt(int(k2))
-    for kk in (k, k + 1):
-        w, h = kk * 16, kk * 9
-        if w > 0 and w * h + 2 * (w // 2) * (h // 2) == fs:
-            return {{"width": w, "height": h, "chroma": "420", "bit_depth": 8}}
-    return None
 
 
 # ─── Paramètres colorimétriques ─────────────────────────────
@@ -149,7 +123,7 @@ metrics = {{"fps": 0.0, "frame_index": 0, "inputs_latency_ms": {{}}, "own_latenc
 # SIGBUS
 bus_error = threading.Event()
 def _handle_sigbus(signum, frame):
-    print("SIGBUS reçu — réouverture des mmap")
+    print("SIGBUS reçu — réouverture Reader/Writer MXL")
     bus_error.set()
 signal.signal(signal.SIGBUS, _handle_sigbus)
 
@@ -228,55 +202,35 @@ threading.Thread(target=lambda: HTTPServer(("0.0.0.0", 8082), ControlHandler).se
                  daemon=True).start()
 
 
-# ─── Lecture / écriture shm ─────────────────────────────────
-input_handle = None   # (file, mmap, name_cached) ou None
+# ─── Lecture (Reader MXL) / écriture (Writer MXL) ───────────
+inst        = bobimxl.Instance()   # domaine = $MXL_DOMAIN ou /dev/shm/mxl (tmpfs bind-monté)
+reader      = None                 # bobimxl.Reader courant ou None
+reader_name = None
 
-def ensure_input():
-    """(Re-)ouvre l'input shm si le nom a changé. None si non câblé / indispo."""
-    global input_handle
+def ensure_reader():
+    """(Re-)crée le Reader MXL si le nom câblé a changé. None si non câblé / flux pas encore là."""
+    global reader, reader_name
     with state_lock:
         wanted = state["input_shm"]
     if not wanted:
-        if input_handle is not None:
-            try: input_handle[1].close(); input_handle[0].close()
+        if reader is not None:
+            try: reader.close()
             except Exception: pass
-            input_handle = None
+            reader = None; reader_name = None
         return None
-    if input_handle is not None and input_handle[2] == wanted:
-        return input_handle[1]
-    if input_handle is not None:
-        try: input_handle[1].close(); input_handle[0].close()
+    if reader is not None and reader_name == wanted:
+        return reader
+    if reader is not None:
+        try: reader.close()
         except Exception: pass
-        input_handle = None
-    path = f"/dev/shm/{{wanted}}"
+        reader = None; reader_name = None
     try:
-        if not os.path.exists(path): return None
-        if os.path.getsize(path) <= V_HEADER_SIZE: return None
-        f = open(path, "r+b")
-        sz = os.path.getsize(path)
-        shm = mmap.mmap(f.fileno(), sz, prot=mmap.PROT_READ)
-        _ = shm[0:16]
-        input_handle = (f, shm, wanted)
-        print(f"input câblé sur {{path}}")
-        return shm
-    except Exception as e:
-        print(f"input ({{wanted}}) indisponible : {{e}}")
-        return None
-
-def lire_frame_yuv(shm, lyt):
-    """Renvoie (yuv_bytes, ts_in_ns) ou (None, None)."""
-    if shm is None: return None, None
-    try:
-        frame_index, ts_in = struct.unpack("QQ", shm[0:16])
-        if frame_index == 0: return None, None
-        slot   = frame_index % lyt["ring_r"]
-        offset = V_HEADER_SIZE + slot * lyt["fr_sz"]
-        data   = bytes(shm[offset:offset + lyt["fr_sz"]])
-        if len(data) < lyt["fr_sz"]:
-            return None, None   # lecture TRONQUÉE (ring/format mismatch) → trame ignorée, JAMAIS de crash
-        return data, ts_in
+        r = bobimxl.Reader(inst, wanted)   # lève si le flux n'existe pas encore
+        reader = r; reader_name = wanted
+        print(f"input câblé sur flux MXL {{wanted}}")
+        return reader
     except Exception:
-        return None, None
+        return None   # flux pas encore publié → on réessaiera
 
 
 # ─── Color correction (numpy) ───────────────────────────────
@@ -473,37 +427,21 @@ def appliquer_correction(yuv_bytes, p, lyt):
 
 
 # ─── Boucle principale ──────────────────────────────────────
-out_f   = None
-out_shm = None
-cur_lyt = None    # layout actif (None = pas encore de format connu)
+writer  = None    # bobimxl.Writer de sortie ou None
+cur_lyt = None    # layout actif (None = format inconnu)
 
-def _ouvrir_sortie(total_size):
-    global out_f, out_shm
-    path = f"/dev/shm/{{SHM_OUT}}"
-    if out_shm is not None:
-        try: out_shm.close()
+def ensure_writer(lyt):
+    """(Re-)crée le Writer de sortie au format `lyt` (le correcteur sort au format d'entrée)."""
+    global writer
+    if writer is not None:
+        try: writer.close()
         except Exception: pass
-    if out_f is not None:
-        try: out_f.close()
-        except Exception: pass
-    with open(path, "wb") as f:
-        f.write(b"\x00" * total_size)
-    out_f   = open(path, "r+b")
-    out_shm = mmap.mmap(out_f.fileno(), total_size)
-
-def _ecrire(yuv, frame_index, lyt):
-    slot   = frame_index % V_RING_SIZE
-    offset = V_HEADER_SIZE + slot * lyt["fr_sz"]
-    out_shm[offset:offset + lyt["fr_sz"]] = yuv
-    out_shm[0:16] = struct.pack("QQ", frame_index, time.time_ns())
-
-def _in_index(shm):
-    if shm is None: return 0
-    try: return struct.unpack_from("Q", shm, 0)[0]
-    except Exception: return 0
+    writer = bobimxl.Writer(inst, SHM_OUT, lyt["width"], lyt["height"], lyt["chroma"],
+                            lyt["bit_depth"], lyt["fps_num"], lyt["fps_den"],
+                            index_mode=("tai" if GENLOCK else "free"))
 
 frame_index = 0
-last_in_idx = 0
+last_in_idx = -1
 start       = time.time()
 next_t      = start
 last_black  = start
@@ -513,97 +451,98 @@ _fps_last_t   = start
 while True:
     if bus_error.is_set():
         bus_error.clear()
-        if input_handle is not None:
-            try: input_handle[1].close(); input_handle[0].close()
+        if reader is not None:
+            try: reader.close()
             except Exception: pass
-        if out_shm is not None:
-            try: out_shm.close(); out_f.close()
+        if writer is not None:
+            try: writer.close()
             except Exception: pass
-            out_f = out_shm = None
+        reader = reader_name = writer = None
         cur_lyt = None
         time.sleep(2)
-        last_in_idx = 0
+        last_in_idx = -1
         continue
 
-    shm_in = ensure_input()
+    r = ensure_reader()
 
-    # ─── Résolution du format ────────────────────────────────
-    with state_lock:
-        fmt_hint = state["fmt"]
-        in_name  = state["input_shm"]
+    # ─── Format LU DU flow_def du flux (source de vérité côté donnée) ──
     new_lyt = None
-    if fmt_hint and fmt_hint.get("width") and fmt_hint.get("height"):
-        new_lyt = _make_layout(
-            fmt_hint["width"], fmt_hint["height"],
-            fmt_hint.get("chroma", "422"),
-            fmt_hint.get("bit_depth", 8),
-            fmt_hint.get("fps", 25),
-        )
-    elif shm_in is not None and in_name:
-        detected = _detect_fmt(f"/dev/shm/{{in_name}}")
-        if detected:
-            new_lyt = _make_layout(detected["width"], detected["height"],
-                                   detected.get("chroma", "422"),
-                                   detected.get("bit_depth", 8))
+    if r is not None:
+        f = r.format()
+        if f:
+            new_lyt = _make_layout(f["width"], f["height"], f["chroma"],
+                                   f["bit_depth"], f["fps_num"], f["fps_den"])
+    with state_lock:
+        in_name = state["input_shm"]
 
     if new_lyt is None:
-        # Format inconnu : attendre que l'entrée soit disponible
+        # Flux pas encore publié / format indispo → attendre (le hint orchestrateur n'est PAS
+        # utilisé pour décoder ; il ne sert qu'au gating UX côté contrôleur).
         time.sleep(0.05)
         continue
 
-    # Reconfigurer le shm de sortie si le format a changé
-    if cur_lyt is None or cur_lyt["total"] != new_lyt["total"]:
+    # (Re)configurer la sortie si le format a changé
+    if cur_lyt is None or cur_lyt["fr_sz"] != new_lyt["fr_sz"]:
         cur_lyt = new_lyt
-        # ring_r de l'ENTRÉE = DÉRIVÉ de la taille RÉELLE du shm producteur (PAS le ring de sortie).
-        # Un producteur en ring 8 (RX 2110_io) lu en supposant ring 10 → l'offset des slots 8/9
-        # déborde le shm → lecture tronquée → reshape crash. cf. mxl-consumer-format-contract.
-        try:
-            _in_sz = os.path.getsize(f"/dev/shm/{{in_name}}")
-            cur_lyt["ring_r"] = max(1, (_in_sz - V_HEADER_SIZE) // cur_lyt["fr_sz"])
-        except Exception:
-            cur_lyt["ring_r"] = V_RING_SIZE
-        _ouvrir_sortie(cur_lyt["total"])
-        last_in_idx = 0
+        ensure_writer(cur_lyt)
+        last_in_idx = -1
         frame_index = 0
         start = time.time(); next_t = start; last_black = start
-        # Trame noire de repli CACHÉE (4 Mo) : calculée UNE fois au changement de format au lieu
-        # d'être reconstruite à chaque itération de la boucle (gaspillage CPU dans l'attente d'entrée).
+        # Trame noire de repli CACHÉE : calculée UNE fois au changement de format.
         empty_frame = (b"\x10" * cur_lyt["y_sz"] +
                        b"\x80" * (2 * cur_lyt["uv_sz"]))
-        print(f"format: {{cur_lyt['width']}}x{{cur_lyt['height']}} chroma={{cur_lyt['chroma']}}")
+        print(f"format: {{cur_lyt['width']}}x{{cur_lyt['height']}} chroma={{cur_lyt['chroma']}} {{cur_lyt['bit_depth']}}b")
 
     fps      = cur_lyt["fps"]
     interval = 1.0 / fps
 
+    # ─── Lecture du grain d'entrée ────────────────────────────
+    got = None
+    try:
+        got = r.get_latest()
+    except Exception:
+        # flux disparu (producteur redéployé) → re-créer le Reader au prochain tour
+        try: reader.close()
+        except Exception: pass
+        reader = reader_name = None
+        time.sleep(0.05); continue
+
     if GENLOCK:
-        idx_in = _in_index(shm_in)
-        if shm_in is None:
+        if got is None:
             now = time.time()
-            if now - last_black >= interval:
-                _ecrire(empty_frame, frame_index, cur_lyt)
-                frame_index += 1; last_black = now
+            if now - last_black >= interval:   # pas d'entrée → noir sur la grille
+                _gi, gi_b, vw_b = writer.open_grain()
+                vw_b[:len(empty_frame)] = np.frombuffer(empty_frame, dtype=np.uint8)
+                writer.commit(gi_b)
+                last_black = now
             time.sleep(0.002); continue
-        if idx_in == 0 or idx_in == last_in_idx:
+        idx_in = got[0]
+        if idx_in == last_in_idx:
             time.sleep(0.002); continue
         last_in_idx = idx_in; last_black = time.time()
     else:
         now  = time.time()
         wait = next_t - now
         if wait > 0: time.sleep(wait)
+        idx_in = got[0] if got else None
 
     with state_lock:
         params = dict(state["params"])
 
-    ts_cycle_start = time.time_ns()   # instant de LECTURE (après pacing) → base transit/own
-    in_yuv, ts_in = lire_frame_yuv(shm_in, cur_lyt)
-    if in_yuv:
+    ts_cycle_start = time.time_ns()   # base own_latency
+    if got is not None:
+        in_yuv  = bytes(got[2])                       # vue numpy du grain → octets planar
         out_yuv = appliquer_correction(in_yuv, params, cur_lyt)
+        lat_in.push((bobimxl.now_tai() - r.last_write_time()) / 1e6)   # TRANSIT (TAI)
     else:
         out_yuv = empty_frame
-    _ecrire(out_yuv, frame_index, cur_lyt)
+
+    # Écriture du grain de sortie — genlock par PROPAGATION : même index que l'entrée.
+    out_idx = idx_in if (GENLOCK and got is not None) else None
+    _gidx, gi_o, vw_o = writer.open_grain(index=out_idx)
+    vw_o[:len(out_yuv)] = np.frombuffer(out_yuv, dtype=np.uint8)
+    writer.commit(gi_o)
     ts_out = time.time_ns()
-    if in_yuv and ts_in:
-        lat_in.push((ts_cycle_start - ts_in) / 1e6)   # TRANSIT (arrivée) = âge à la lecture
     own_lat.push((ts_out - ts_cycle_start) / 1e6)      # traitement PROPRE (correction)
     frame_index += 1
     if not GENLOCK:
