@@ -53,8 +53,11 @@ _RGBMAX = 255.0
 
 # ─── Layout YUV : calculé à partir du format détecté/injecté ───
 
-def _make_layout(w, h, chroma="422", bit_depth=8, fps_num=25, fps_den=1):
-    """Calcule tous les dérivés de format nécessaires au traitement (MXL gère le ring)."""
+def _make_layout(w, h, chroma="422", bit_depth=8, fps_num=25, fps_den=1,
+                 interlace_mode="progressive", frame_height=None, frame_fps_num=None):
+    """Calcule tous les dérivés de format nécessaires au traitement (MXL gère le ring).
+    Champ-natif : w/h = dims de GRAIN (champ si entrelacé) → on traite un champ ; les dims/cadence
+    de TRAME + interlace servent à DÉCLARER la sortie entrelacée (passthrough)."""
     w -= w % 2; h -= h % 2
     deep  = bit_depth >= 10
     bps   = 2 if deep else 1
@@ -75,6 +78,9 @@ def _make_layout(w, h, chroma="422", bit_depth=8, fps_num=25, fps_den=1):
         maxf=float((1 << bit_depth) - 1),
         cw=cw, ch=ch, uv_w=uv_w, uv_h=uv_h,
         y_sz=y_sz, uv_sz=uv_sz, fr_sz=fr_sz,
+        interlace_mode=interlace_mode,
+        frame_height=int(frame_height or h),
+        frame_fps_num=int(frame_fps_num or fps_num),
     )
 
 
@@ -436,9 +442,13 @@ def ensure_writer(lyt):
     if writer is not None:
         try: writer.close()
         except Exception: pass
-    writer = bobimxl.Writer(inst, SHM_OUT, lyt["width"], lyt["height"], lyt["chroma"],
-                            lyt["bit_depth"], lyt["fps_num"], lyt["fps_den"],
-                            index_mode=("tai" if GENLOCK else "free"))
+    # Champ-natif : on DÉCLARE la sortie au format TRAME + interlace (passthrough) → libmxl redonne
+    # des grains-champs. On écrit le champ traité (lyt["height"] lignes) à l'index du grain d'entrée
+    # (parité de champ préservée). Progressif : frame_*==grain, interlace=progressive → inchangé.
+    writer = bobimxl.Writer(inst, SHM_OUT, lyt["width"], lyt["frame_height"], lyt["chroma"],
+                            lyt["bit_depth"], lyt["frame_fps_num"], lyt["fps_den"],
+                            index_mode=("tai" if GENLOCK else "free"),
+                            interlace=lyt["interlace_mode"])
 
 frame_index = 0
 last_in_idx = -1
@@ -471,7 +481,9 @@ while True:
         f = r.format()
         if f:
             new_lyt = _make_layout(f["width"], f["height"], f["chroma"],
-                                   f["bit_depth"], f["fps_num"], f["fps_den"])
+                                   f["bit_depth"], f["fps_num"], f["fps_den"],
+                                   f.get("interlace_mode", "progressive"),
+                                   f.get("frame_height"), f.get("frame_fps_num"))
     with state_lock:
         in_name = state["input_shm"]
 
