@@ -62,5 +62,13 @@
   "store": {
     "scope": "global",
     "unique_name": true
-  }
+  },
+  "actions": [
+    {
+      "id": "reset",
+      "label": "Réinitialiser la correction",
+      "endpoint": "/reset",
+      "params": []
+    }
+  ]
 }
