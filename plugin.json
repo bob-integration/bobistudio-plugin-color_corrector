@@ -69,6 +69,59 @@
       "label": "Réinitialiser la correction",
       "endpoint": "/reset",
       "params": []
+    },
+    {
+      "id": "set_params",
+      "label": "Régler la correction (champs vides = inchangés)",
+      "endpoint": "/params",
+      "params": [
+        {
+          "key": "brightness",
+          "label": "Luminosité (-1..1)",
+          "type": "number",
+          "optional": true
+        },
+        {
+          "key": "contrast",
+          "label": "Contraste (0..2)",
+          "type": "number",
+          "optional": true
+        },
+        {
+          "key": "saturation",
+          "label": "Saturation (0..3)",
+          "type": "number",
+          "optional": true
+        },
+        {
+          "key": "gamma",
+          "label": "Gamma (0.1..10)",
+          "type": "number",
+          "optional": true
+        },
+        {
+          "key": "hue",
+          "label": "Teinte (deg, -180..180)",
+          "type": "number",
+          "optional": true
+        }
+      ]
+    }
+  ],
+  "state": [
+    {
+      "id": "saturation",
+      "label": "Saturation",
+      "endpoint": "/state",
+      "path": "params.saturation",
+      "type": "number"
+    },
+    {
+      "id": "brightness",
+      "label": "Luminosité",
+      "endpoint": "/state",
+      "path": "params.brightness",
+      "type": "number"
     }
   ]
 }
