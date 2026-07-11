@@ -14,6 +14,11 @@
 # (source de vérité CÔTÉ DONNÉE, écrite par le producteur → ne peut pas diverger des octets). Le
 # format injecté par l'orchestrateur (POST /input) ne sert plus qu'au gating UX (ignoré ici).
 #
+# MODE TRANCHE (slice_mode, chantier latence sous-trame) : en genlock (verrou-entrée 1:1) et
+# entrée PROGRESSIVE, la sortie corrigée est publiée BANDE PAR BANDE en suivant les tranches
+# du grain SOURCE (get_slice, patch mxl-planar-slices) — la correction est PAR PIXEL (ligne-
+# locale), octet-identique au plein. Entrelacé / genlock off / slice_mode off → historique.
+#
 # Template str.format : SEULS {config} / {hostname} / {plugin_version} sont des
 # placeholders. TOUTE autre accolade littérale doit être doublée {{ }}.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -47,6 +52,35 @@ _gl               = CONFIG.get("genlock", True)
 GENLOCK           = _gl if isinstance(_gl, bool) else str(_gl).strip().lower() in ("1", "true", "yes", "on")
 INITIAL_INPUT_SHM = (CONFIG.get("input_shm") or None)
 INITIAL_PARAMS    = CONFIG.get("cc_params") or {{}}
+
+# ── MODE TRANCHE (chantier latence sous-trame, cf. patch mxl-planar-slices) ─────────────────
+# slice_mode=true → en GENLOCK (verrou-entrée 1:1, propagation d'index) et entrée PROGRESSIVE,
+# le correcteur suit le grain de TÊTE de la source via get_slice (réveil à chaque commit partiel
+# du producteur) et écrit la sortie corrigée BANDE PAR BANDE avec commit progressif
+# (validSlices=1..N) → l'étage correcteur n'ajoute plus ~1 trame de latence, l'aval
+# (multiview/TX 2110 slice) démarre sur la 1ʳᵉ bande. Convention (identique moteur/pyramide/
+# udc/multiview) : k tranches ⇔ lignes image [0, k·slice_height) valides SUR LES 3 PLANS
+# (Y|Cb|Cr). La correction est PAR PIXEL (ligne-locale) → la version bandée est identique
+# OCTET PAR OCTET au plein (seul le glow, blur plein champ, est appliqué en fin de grain).
+# Entrelacé / genlock off / hauteur sans diviseur / slice_mode absent-False → comportement
+# STRICTEMENT identique à l'historique (flowDef de sortie sans slice_height).
+_slm = CONFIG.get("slice_mode", False)
+SLICE_MODE  = _slm if isinstance(_slm, bool) else str(_slm).strip().lower() in ("1", "true", "yes", "on")
+SLICE_LINES = max(1, int(CONFIG.get("slice_lines") or 36))
+# Nb de tranches CIBLE, dérivé de slice_lines (36 lignes ≈ 1080/30 → ~30 tranches) : même
+# granularité TEMPORELLE que le producteur amont, adaptée à la hauteur réelle de la sortie.
+_SLICE_TARGET = max(1, 1080 // SLICE_LINES)
+
+def _cc_slice_h(oh):
+    """MODE TRANCHE — slice_height de la sortie (même algo que pyramide _proxy_slice_h / udc
+    _out_slice_h) : le plus petit diviseur sh de oh avec sh ≥ max(1, oh // _SLICE_TARGET)
+    (~30 tranches ; 1080→36, 720→24). Aucun diviseur raisonnable (sh > oh//2, ex. hauteur
+    première) → 0 = inéligible (whole-frame)."""
+    lo = max(1, oh // _SLICE_TARGET)
+    for sh in range(lo, oh // 2 + 1):
+        if oh % sh == 0:
+            return sh
+    return 0
 
 _RGBMAX = 255.0
 
@@ -124,7 +158,8 @@ state = {{
 
 # Métriques
 metrics_lock = threading.Lock()
-metrics = {{"fps": 0.0, "frame_index": 0, "inputs_latency_ms": {{}}, "own_latency_ms": None, "plugin_version": PLUGIN_VERSION}}
+metrics = {{"fps": 0.0, "frame_index": 0, "inputs_latency_ms": {{}}, "own_latency_ms": None,
+           "slice_mode": False, "plugin_version": PLUGIN_VERSION}}
 
 # SIGBUS
 bus_error = threading.Event()
@@ -366,13 +401,12 @@ def _get_lut_cb(p, lyt):
     c["luts"] = (dy, du, dv)
     return c["luts"]
 
-def appliquer_correction(yuv_bytes, p, lyt):
-    """Applique les params de correction. Renvoie yuv bytes."""
-    # IDENTITÉ → passthrough : aucune passe numpy quand rien n'est réglé.
-    if _is_neutral(p):
-        return yuv_bytes
+def _corriger_yuv(y, u, v, p, lyt):
+    """Corps de correction HORS GLOW sur des plans numpy (Y, U, V) — ne mute pas ses entrées.
+    Toutes les opérations sont LIGNE-LOCALES (LUT/float par pixel) → appelable sur la trame
+    ENTIÈRE ou sur une BANDE alignée aux lignes chroma (mode tranche), résultat identique
+    par construction. Le glow (blur plein champ, NON ligne-local) reste chez l'appelant."""
     neutf = lyt["neutf"]; maxf = lyt["maxf"]; np_dt = lyt["np_dt"]
-    y, u, v = split_yuv(yuv_bytes, lyt)
 
     # Domaine Y (luminosité/contraste/gamma) : un seul gather via LUT cachée (plus de float ni np.power).
     lut_y = _get_lut_y(p, lyt)
@@ -425,19 +459,80 @@ def appliquer_correction(yuv_bytes, p, lyt):
             u = np.clip(u.astype(np.float32) + du[ys], 0, maxf).astype(np_dt)
             v = np.clip(v.astype(np.float32) + dv[ys], 0, maxf).astype(np_dt)
 
+    return y, u, v
+
+
+def _glow_actif(p):
+    """True si le glow (blur plein champ — NON bandable) est activé ET d'intensité > 0."""
+    return bool(p.get("glow_enabled", 1.0)) and p["glow"] > 0.0
+
+
+def appliquer_correction(yuv_bytes, p, lyt):
+    """Applique les params de correction. Renvoie yuv bytes."""
+    # IDENTITÉ → passthrough : aucune passe numpy quand rien n'est réglé.
+    if _is_neutral(p):
+        return yuv_bytes
+    y, u, v = split_yuv(yuv_bytes, lyt)
+    y, u, v = _corriger_yuv(y, u, v, p, lyt)
+
     # Glow EN DERNIER (sur le Y final), uniquement si activé (bouton) ET intensité > 0.
-    if p.get("glow_enabled", 1.0) and p["glow"] > 0.0:
+    if _glow_actif(p):
         y = _apply_glow(y, p["glow"], p["glow_thresh"], p["glow_radius"], lyt)
 
     return join_yuv(y, u, v)
 
 
-# ─── Boucle principale ──────────────────────────────────────
-writer  = None    # bobimxl.Writer de sortie ou None
-cur_lyt = None    # layout actif (None = format inconnu)
+def _plan_bande(p, lyt):
+    """MODE TRANCHE — plan de traitement précalculé UNE fois par grain (hors glow, géré en fin
+    de grain) : ("copy", None) identité → memcpy de bande ; ("lut", lut) seul le domaine Y est
+    actif → np.take(out=) directement dans la vue du grain, ZÉRO allocation par bande ;
+    ("full", None) corps complet _corriger_yuv sur la bande."""
+    if (p["brightness"] == 0.0 and p["contrast"] == 1.0 and p["saturation"] == 1.0 and
+            p["gamma"] == 1.0 and p["hue"] == 0.0 and
+            p["gamma_r"] == 1.0 and p["gamma_g"] == 1.0 and p["gamma_b"] == 1.0 and
+            all(p[k] == 0.0 for k in _CB_KEYS)):
+        return ("copy", None)       # identité hors glow (glow éventuel appliqué en fin de grain)
+    lut_y = _get_lut_y(p, lyt)
+    if (lut_y is not None and p["saturation"] == 1.0 and p["hue"] == 0.0 and
+            p["gamma_r"] == 1.0 and p["gamma_g"] == 1.0 and p["gamma_b"] == 1.0 and
+            _get_lut_cb(p, lyt) is None):
+        return ("lut", lut_y)
+    return ("full", None)
 
-def ensure_writer(lyt):
-    """(Re-)crée le Writer de sortie au format `lyt` (le correcteur sort au format d'entrée)."""
+
+def _corriger_bande(plan, p, lyt, y0, u0, v0, g_y, g_u, g_v, a, b):
+    """MODE TRANCHE — corrige les lignes [a, b) (a et b multiples de lignes chroma entières)
+    et les écrit DIRECTEMENT dans les vues du grain de sortie (zéro-copie). plan = _plan_bande
+    du grain. Chemin "lut" : lut[plane[a:b]] identique par construction au lut[plane] plein,
+    sans buffer intermédiaire (np.take out=). Chemin "full" : mêmes opérations que le plein
+    restreintes à la bande (toutes LIGNE-LOCALES) → identique octet par octet."""
+    ch = lyt["ch"]
+    ca = a // ch; cb = b // ch
+    mode, lut_y = plan
+    if mode == "copy":
+        g_y[a:b] = y0[a:b]
+    elif mode == "lut":
+        np.take(lut_y, y0[a:b], out=g_y[a:b])
+    else:
+        yb, ub, vb = _corriger_yuv(y0[a:b], u0[ca:cb], v0[ca:cb], p, lyt)
+        g_y[a:b] = yb
+        if cb > ca:
+            g_u[ca:cb] = ub; g_v[ca:cb] = vb
+        return
+    if cb > ca:                       # copy/lut : chroma inchangé → memcpy de bande
+        g_u[ca:cb] = u0[ca:cb]; g_v[ca:cb] = v0[ca:cb]
+
+
+# ─── Boucle principale ──────────────────────────────────────
+writer   = None    # bobimxl.Writer de sortie ou None
+cur_lyt  = None    # layout actif (None = format inconnu)
+slice_h  = 0       # MODE TRANCHE : slice_height de la sortie (0 = whole-frame)
+slice_on = False   # MODE TRANCHE actif pour le format courant
+
+def ensure_writer(lyt, slice_h=0):
+    """(Re-)crée le Writer de sortie au format `lyt` (le correcteur sort au format d'entrée).
+    MODE TRANCHE : slice_h > 0 → le flowDef porte slice_height, libmxl publie le grain en
+    N = hauteur/slice_h tranches (commit progressif) ; 0/absent → flowDef inchangé."""
     global writer
     if writer is not None:
         try: writer.close()
@@ -448,7 +543,8 @@ def ensure_writer(lyt):
     writer = bobimxl.Writer(inst, SHM_OUT, lyt["width"], lyt["frame_height"], lyt["chroma"],
                             lyt["bit_depth"], lyt["frame_fps_num"], lyt["fps_den"],
                             index_mode=("tai" if GENLOCK else "free"),
-                            interlace=lyt["interlace_mode"])
+                            interlace=lyt["interlace_mode"],
+                            **({{"slice_height": int(slice_h)}} if slice_h else {{}}))
 
 frame_index = 0
 last_in_idx = -1
@@ -496,14 +592,33 @@ while True:
     # (Re)configurer la sortie si le format a changé
     if cur_lyt is None or cur_lyt["fr_sz"] != new_lyt["fr_sz"]:
         cur_lyt = new_lyt
-        ensure_writer(cur_lyt)
+        # MODE TRANCHE : éligibilité par format — genlock (verrou 1:1) + entrée PROGRESSIVE +
+        # hauteur découpable (_cc_slice_h). Sinon slice_h = 0 → chemin historique STRICTEMENT
+        # inchangé (flowDef de sortie sans slice_height), repli loggé.
+        slice_h = 0
+        if SLICE_MODE:
+            _il = str(cur_lyt.get("interlace_mode") or "progressive").startswith("interlaced")
+            if not GENLOCK:
+                print("slice_mode demandé mais genlock off → repli whole-frame")
+            elif _il:
+                print("slice_mode demandé mais entrée ENTRELACÉE → repli whole-frame")
+            else:
+                slice_h = _cc_slice_h(cur_lyt["height"])
+                if not slice_h:
+                    print(f"slice_mode demandé mais hauteur {{cur_lyt['height']}} sans diviseur "
+                          "raisonnable → repli whole-frame")
+        slice_on = slice_h > 0
+        with metrics_lock:
+            metrics["slice_mode"] = slice_on
+        ensure_writer(cur_lyt, slice_h)
         last_in_idx = -1
         frame_index = 0
         start = time.time(); next_t = start; last_black = start
         # Trame noire de repli CACHÉE : calculée UNE fois au changement de format.
         empty_frame = (b"\x10" * cur_lyt["y_sz"] +
                        b"\x80" * (2 * cur_lyt["uv_sz"]))
-        print(f"format: {{cur_lyt['width']}}x{{cur_lyt['height']}} chroma={{cur_lyt['chroma']}} {{cur_lyt['bit_depth']}}b")
+        print(f"format: {{cur_lyt['width']}}x{{cur_lyt['height']}} chroma={{cur_lyt['chroma']}} {{cur_lyt['bit_depth']}}b"
+              + (f" [tranches sh={{slice_h}}]" if slice_on else ""))
 
     fps      = cur_lyt["fps"]
     interval = 1.0 / fps
@@ -511,10 +626,28 @@ while True:
     # ─── Lecture du grain d'entrée ────────────────────────────
     got = None
     try:
-        got = r.get_latest()
+        if slice_on:
+            # MODE TRANCHE : suivre le grain de TÊTE (peut être EN COURS d'écriture).
+            h_idx = r.head_index()
+            if h_idx != bobimxl.MXL_UNDEFINED_INDEX and h_idx == last_in_idx:
+                time.sleep(0.002); continue     # même grain (source figée) — comme idx==last
+            if h_idx != bobimxl.MXL_UNDEFINED_INDEX:
+                # 1ʳᵉ tranche du grain de tête ; pas encore là (tête à peine réclamée) ou flux
+                # sans le patch slices → repli get_latest (grain complet, boucle dégénérée).
+                got = r.get_slice(h_idx, 1, timeout_ns=2_000_000)
+                if got is None:
+                    got = r.get_latest()
+            # h_idx indéfini → got=None : pas d'entrée → noir GENLOCK (comme l'historique)
+        else:
+            got = r.get_latest()
     except Exception:
         # flux disparu (producteur redéployé) → re-créer le Reader au prochain tour
         try: reader.close()
+        except Exception: pass
+        # GC ENTRE close et reopen (parade générique du piège des générations, cf. pyramide/
+        # moteur tx_reopen_if_stale) : sans GC le flux périmé reste résolvable par nom et la
+        # réouverture (même nom via ensure_reader) retombe sur L'ORPHELIN → gel permanent.
+        try: inst.garbage_collect()
         except Exception: pass
         reader = reader_name = None
         time.sleep(0.05); continue
@@ -542,20 +675,117 @@ while True:
         params = dict(state["params"])
 
     ts_cycle_start = time.time_ns()   # base own_latency
-    if got is not None:
-        in_yuv  = bytes(got[2])                       # vue numpy du grain → octets planar
-        out_yuv = appliquer_correction(in_yuv, params, cur_lyt)
-        lat_in.push((bobimxl.now_tai() - r.last_write_time()) / 1e6)   # TRANSIT (TAI)
+    wait_ns = 0   # cumul des ATTENTES get_slice (mode tranche) — EXCLUES de own_latency_ms
+    if slice_on and got is not None:
+        # ─── MODE TRANCHE : correction BANDE PAR BANDE, écrite en zéro-copie dans le grain ───
+        transit_ms = (bobimxl.now_tai() - r.last_write_time()) / 1e6   # TRANSIT (TAI), à la lecture
+        gi_s = got[1]
+        src_h = cur_lyt["height"]; s_ch = cur_lyt["ch"]
+        ny = cur_lyt["width"] * src_h
+        nu = cur_lyt["uv_w"] * cur_lyt["uv_h"]
+        np_dt = cur_lyt["np_dt"]
+        try:
+            # Vues ZÉRO-COPIE sur le payload source (PAS de bytes() copie : on ne lit jamais
+            # au-delà des tranches valides — attente ciblée plus bas ; le handler SIGBUS
+            # couvre la recréation du flux amont, comme pour le chemin historique).
+            arr = got[2][:cur_lyt["fr_sz"]].view(np_dt)
+            y0 = arr[:ny].reshape(src_h, cur_lyt["width"])
+            u0 = arr[ny:ny + nu].reshape(cur_lyt["uv_h"], cur_lyt["uv_w"])
+            v0 = arr[ny + nu:ny + 2 * nu].reshape(cur_lyt["uv_h"], cur_lyt["uv_w"])
+        except Exception:
+            time.sleep(0.002); continue
+        # Grain de sortie à l'index SOURCE (genlock par PROPAGATION, inchangé) + vues par plan.
+        _gidx, gi_o, vw_o = writer.open_grain(index=idx_in)
+        ysz = cur_lyt["y_sz"]; usz = cur_lyt["uv_sz"]
+        g_y = vw_o[:ysz].view(np_dt).reshape(src_h, cur_lyt["width"])
+        g_u = vw_o[ysz:ysz + usz].view(np_dt).reshape(cur_lyt["uv_h"], cur_lyt["uv_w"])
+        g_v = vw_o[ysz + usz:ysz + 2 * usz].view(np_dt).reshape(cur_lyt["uv_h"], cur_lyt["uv_w"])
+        plan = _plan_bande(params, cur_lyt)
+        # Glow actif → PAS de commit progressif (le blur est plein champ, appliqué en fin de
+        # grain : publier des bandes pré-glow exposerait un rendu différent du final).
+        glow_on = _glow_actif(params)
+        total = max(1, int(gi_s.totalSlices or 1))
+        islh  = max(1, src_h // total)   # lignes source par tranche (tranches égales)
+        valid = max(1, int(gi_s.validSlices or 1))
+        # Budget d'attente TOTAL ≈ 1,5 période de trame : une source en retard ne bloque
+        # jamais la sortie au-delà d'une demi-trame après le nominal.
+        deadl_ns = time.monotonic_ns() + int(1.5e9 * cur_lyt["fps_den"]
+                                             / max(1, cur_lyt["fps_num"]))
+        written = 0; k_done = 0
+        try:
+            for j in range(1, total + 1):
+                if j > valid:
+                    left = deadl_ns - time.monotonic_ns()
+                    _w0 = time.monotonic_ns()
+                    g = (r.get_slice(idx_in, j, timeout_ns=max(1, left))
+                         if left > 0 else None)
+                    wait_ns += time.monotonic_ns() - _w0
+                    if g is not None:
+                        valid = max(j, int(g[1].validSlices or j))
+                    else:
+                        # Budget épuisé / producteur en retard → REPLI : compléter la sortie
+                        # depuis le grain COMPLET précédent (idx-1) si disponible (léger
+                        # tearing d'UNE image), sinon les lignes déjà écrites restent. Le
+                        # commit FINAL est garanti par le finally.
+                        gp = r.get(idx_in - 1, timeout_ns=2_000_000) if idx_in > 0 else None
+                        if gp is not None:
+                            try:
+                                arrp = gp[2][:cur_lyt["fr_sz"]].view(np_dt)
+                                y0 = arrp[:ny].reshape(src_h, cur_lyt["width"])
+                                u0 = arrp[ny:ny + nu].reshape(cur_lyt["uv_h"], cur_lyt["uv_w"])
+                                v0 = arrp[ny + nu:ny + 2 * nu].reshape(cur_lyt["uv_h"],
+                                                                       cur_lyt["uv_w"])
+                                _corriger_bande(plan, params, cur_lyt, y0, u0, v0,
+                                                g_y, g_u, g_v, written, src_h)
+                                written = src_h
+                            except Exception:
+                                pass
+                        break
+                # Tranche source j dispo : lignes [0, sr) valides sur les 3 plans → la sortie
+                # est en GÉOMÉTRIE IDENTIQUE : delta de lignes [written, b) directement
+                # corrigeable, borné aux lignes CHROMA source entières (b multiple de ch).
+                sr = min(src_h, j * islh)
+                b = sr - (sr % s_ch)
+                if b > written:
+                    _corriger_bande(plan, params, cur_lyt, y0, u0, v0,
+                                    g_y, g_u, g_v, written, b)
+                    written = b
+                if j < total and not glow_on:
+                    k = written // slice_h
+                    if k > k_done:   # commit progressif (réveille l'aval), jamais en arrière
+                        k_done = k
+                        writer.commit(gi_o, valid_slices=k)
+        finally:
+            # Glow EN DERNIER (blur plein champ sur le Y final du grain — même entrée que le
+            # chemin plein : le Y corrigé — donc résultat identique), puis commit FINAL
+            # TOUJOURS (un grain laissé partiel ne serait jamais lisible par un consommateur
+            # whole-frame).
+            if glow_on:
+                try:
+                    g_y[:] = _apply_glow(g_y, params["glow"], params["glow_thresh"],
+                                         params["glow_radius"], cur_lyt)
+                except Exception: pass
+            try: writer.commit(gi_o, valid_slices=None)
+            except Exception: pass
+        lat_in.push(transit_ms)
     else:
-        out_yuv = empty_frame
+        if got is not None:
+            in_yuv  = bytes(got[2])                       # vue numpy du grain → octets planar
+            out_yuv = appliquer_correction(in_yuv, params, cur_lyt)
+            lat_in.push((bobimxl.now_tai() - r.last_write_time()) / 1e6)   # TRANSIT (TAI)
+        else:
+            out_yuv = empty_frame
 
-    # Écriture du grain de sortie — genlock par PROPAGATION : même index que l'entrée.
-    out_idx = idx_in if (GENLOCK and got is not None) else None
-    _gidx, gi_o, vw_o = writer.open_grain(index=out_idx)
-    vw_o[:len(out_yuv)] = np.frombuffer(out_yuv, dtype=np.uint8)
-    writer.commit(gi_o)
+        # Écriture du grain de sortie — genlock par PROPAGATION : même index que l'entrée.
+        out_idx = idx_in if (GENLOCK and got is not None) else None
+        _gidx, gi_o, vw_o = writer.open_grain(index=out_idx)
+        vw_o[:len(out_yuv)] = np.frombuffer(out_yuv, dtype=np.uint8)
+        writer.commit(gi_o)
     ts_out = time.time_ns()
-    own_lat.push((ts_out - ts_cycle_start) / 1e6)      # traitement PROPRE (correction)
+    # own = traitement PROPRE (correction) SANS les attentes get_slice (suivi du fil ≈ période
+    # de trame en mode tranche) — même contrat que pyramide/udc : l'orchestrateur y lit la
+    # SATURATION du nœud, pas le suivi.
+    own_lat.push((ts_out - ts_cycle_start - wait_ns) / 1e6)
     frame_index += 1
     if not GENLOCK:
         next_t = start + frame_index * interval
