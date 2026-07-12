@@ -1,7 +1,10 @@
 {
-  "version": "0.8.0",
-  "date": "2026-07-11",
+  "version": "0.8.1",
+  "date": "2026-07-12",
   "changes": {
+    "Réglages mode tranche (0.8.1)": [
+      "Exposition des réglages du mode tranche dans le panneau ⚙ Réglages et la palette (config_schema, scope system) : slice_mode, slice_lines. Schéma/UI seulement — aucun changement de comportement du script."
+    ],
     "Nouveautés (0.8.0)": [
       "MODE TRANCHE (chantier latence sous-trame, patch mxl-planar-slices) : avec `slice_mode` (défaut false), en GENLOCK (verrou-entrée 1:1) et entrée PROGRESSIVE, la sortie corrigée est publiée BANDE PAR BANDE — le correcteur suit le grain de TÊTE de la source (head_index + get_slice, réveil à chaque commit partiel du producteur) et écrit chaque delta de lignes corrigé en ZÉRO-COPIE dans la vue du grain de sortie avec commit progressif (validSlices=1..N) → l'étage correcteur n'ajoute plus ~1 trame de latence, l'aval (multiview/TX 2110 slice) démarre sur la 1ʳᵉ bande. slice_height de sortie = plus petit diviseur de la hauteur ≥ hauteur/(1080/slice_lines) (défaut slice_lines=36 : 1080→36, 720→24 ; hauteur sans diviseur raisonnable → inéligible). La correction étant PAR PIXEL (LUT Y, saturation/teinte, gamma R/G/B, color balance — toutes ligne-locales), la version bandée est identique OCTET PAR OCTET au plein (vérifié array_equal 8/10 bits, 422/420, réglages neutres et actifs) ; chemin identité = memcpy de bande, chemin LUT Y seule = np.take(out=) sans allocation par bande. Le GLOW (blur plein champ, non ligne-local) est appliqué EN FIN de grain sur le Y du grain de sortie : quand il est actif, pas de commit progressif (l'aval ne voit que le grain final, jamais un rendu pré-glow). Budget d'attente 1,5 période : source en retard → complétion depuis le grain COMPLET précédent (léger tearing d'une image), commit final TOUJOURS (try/finally). Index source PROPAGÉ (genlock inchangé) ; own_latency_ms = correction SANS les attentes get_slice ; métrique `slice_mode: true` quand actif. Entrelacé, genlock off ou slice_mode absent/false → chemin historique STRICTEMENT inchangé (flowDef sans slice_height, noir sans entrée compris). Requiert bobi-compute avec libmxl mxl-planar-slices.",
       "Robustesse : GC (garbage_collect) ENTRE close et réouverture du Reader quand le flux d'entrée disparaît (producteur redéployé) — parade générique du piège des générations : sans GC le flux périmé reste résolvable par nom et la réouverture retombe sur l'orphelin → gel permanent (même motif que pyramide 0.7.1)."
