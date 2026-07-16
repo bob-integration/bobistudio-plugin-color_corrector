@@ -59,6 +59,45 @@
       "endpoint": "/params"
     }
   },
+  "param_tree": {
+    "global_groups": [
+      { "label": "Luminance", "endpoint": "/params", "path_prefix": "params",
+        "fields": {
+          "brightness": { "label": "Luminosité", "type": "number", "min": -1, "max": 1, "default": 0 },
+          "contrast": { "label": "Contraste", "type": "scale", "min": 0, "max": 2, "default": 1 },
+          "gamma": { "label": "Gamma", "type": "scale", "min": 0.1, "max": 10, "default": 1 } } },
+      { "label": "Couleur", "endpoint": "/params", "path_prefix": "params",
+        "fields": {
+          "saturation": { "label": "Saturation", "type": "scale", "min": 0, "max": 3, "default": 1 },
+          "hue": { "label": "Teinte", "type": "angle", "min": -180, "max": 180, "default": 0 } } },
+      { "label": "Gamma par canal", "endpoint": "/params", "path_prefix": "params",
+        "fields": {
+          "gamma_r": { "label": "Gamma R", "type": "scale", "min": 0.1, "max": 10, "default": 1 },
+          "gamma_g": { "label": "Gamma V", "type": "scale", "min": 0.1, "max": 10, "default": 1 },
+          "gamma_b": { "label": "Gamma B", "type": "scale", "min": 0.1, "max": 10, "default": 1 } } },
+      { "label": "Glow / Bloom", "endpoint": "/params", "path_prefix": "params",
+        "fields": {
+          "glow_enabled": { "label": "Actif", "type": "bool", "default": true },
+          "glow": { "label": "Intensité", "type": "scale", "min": 0, "max": 2, "default": 0 },
+          "glow_thresh": { "label": "Seuil", "type": "ratio", "min": 0, "max": 1, "default": 0.7 },
+          "glow_radius": { "label": "Rayon", "type": "pixels", "min": 1, "max": 64, "default": 8 } } },
+      { "label": "Balance — Ombres", "endpoint": "/params", "path_prefix": "params",
+        "fields": {
+          "cb_rs": { "label": "Rouge", "type": "number", "min": -1, "max": 1, "default": 0 },
+          "cb_gs": { "label": "Vert", "type": "number", "min": -1, "max": 1, "default": 0 },
+          "cb_bs": { "label": "Bleu", "type": "number", "min": -1, "max": 1, "default": 0 } } },
+      { "label": "Balance — Tons moyens", "endpoint": "/params", "path_prefix": "params",
+        "fields": {
+          "cb_rm": { "label": "Rouge", "type": "number", "min": -1, "max": 1, "default": 0 },
+          "cb_gm": { "label": "Vert", "type": "number", "min": -1, "max": 1, "default": 0 },
+          "cb_bm": { "label": "Bleu", "type": "number", "min": -1, "max": 1, "default": 0 } } },
+      { "label": "Balance — Lumières", "endpoint": "/params", "path_prefix": "params",
+        "fields": {
+          "cb_rh": { "label": "Rouge", "type": "number", "min": -1, "max": 1, "default": 0 },
+          "cb_gh": { "label": "Vert", "type": "number", "min": -1, "max": 1, "default": 0 },
+          "cb_bh": { "label": "Bleu", "type": "number", "min": -1, "max": 1, "default": 0 } } }
+    ]
+  },
   "store": {
     "scope": "global",
     "unique_name": true
