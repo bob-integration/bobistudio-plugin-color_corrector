@@ -10,7 +10,10 @@
     display:flex; gap:8px; flex-wrap:wrap; align-items:center;
     padding-bottom:10px; border-bottom:1px solid var(--border-soft); margin-bottom:10px;
 }
-.cc-toolbar select { font-size:0.88em; }
+/* `.btn` porte un margin-top de 10px (base.css) : dans une barre d'outils en ligne, il décale
+ * les boutons par rapport aux autres contrôles. On l'annule ICI, c'est une affaire de mise en
+ * page de cette barre, pas du composant. */
+.cc-toolbar .btn { margin-top: 0; }
 .cc-toolbar-spacer { flex:1; min-width:8px; }
 .cc-inline-prompt {
     display:flex; gap:6px; align-items:center; flex:1;
