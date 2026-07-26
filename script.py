@@ -246,6 +246,7 @@ class ControlHandler(BaseHTTPRequestHandler):
                     "shm_out":   SHM_OUT,
                     "params":    dict(state["params"]),
                     "defaults":  dict(DEFAULT_PARAMS),
+                    "log_level": LOG_LEVEL,   # lisible en condition de macro
                     "plugin_version": PLUGIN_VERSION,
                 }})
         else:
@@ -276,6 +277,11 @@ class ControlHandler(BaseHTTPRequestHandler):
                 elif shm is None:
                     state["fmt"] = None
             self._reply(200, {{"ok": True}})
+        elif self.path == "/log_level":
+            # Verbosité À CHAUD (pas de redéploiement) : instruction d'incident. Le niveau
+            # PERSISTANT reste le champ `log_level` du config_schema ; celui-ci est volatil.
+            ok = set_log_level(body.get("level") or body.get("log_level"))
+            self._reply(200 if ok else 400, {{"ok": ok, "log_level": LOG_LEVEL}})
         else:
             self._reply(404, {{"error": "not found"}})
 

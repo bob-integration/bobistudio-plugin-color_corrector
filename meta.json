@@ -1,7 +1,13 @@
 {
-  "version": "0.9.0",
+  "version": "0.10.0",
   "date": "2026-07-26",
   "changes": {
+    "Niveau de log réglable À CHAUD (0.10.0)": [
+      "Endpoint POST /log_level {level} sur le contrôle :8082 : bascule la verbosité pendant un incident, sans redéployer ni couper la production. Une valeur hors debug|info|warning|error est REFUSÉE (HTTP 400, {ok:false}) — jamais un 200 silencieux.",
+      "Niveau courant publié dans /state (et /state en lecture seule) : le niveau effectif se constate sans redéploiement et s'utilise en CONDITION de macro.",
+      "Exposé aux macros : action « Niveau de log (à chaud) » + groupe param_tree « Journal (diagnostic) ». Le réglage PERSISTANT reste le champ `log_level` du config_schema (appliqué au (re)déploiement) ; l'endpoint est volatil.",
+      "REDÉPLOIEMENT du conteneur requis (le nouvel endpoint vit dans le script)."
+    ],
     "Niveau de log par plugin — silencieux par défaut (0.9.0)": [
       "Nouveau réglage `log_level` (détaillé / événements / anomalies / erreurs, défaut « Événements »). Les impressions du script sont désormais classées ÉVÉNEMENT (démarrage, câblage d’une entrée, changement de format, reconnexion, repli) vs ANOMALIE (`warning`/`error`) : au niveau par défaut le journal raconte l’histoire du conteneur sans bavardage. Aucune métrique périodique n’est journalisée (le fps est publié sur :8080).",
       "Pas encore d’endpoint /log_level sur ce plugin : le niveau est appliqué au (re)déploiement. Pilotable par macro via l’étape « config » (config_schema)."

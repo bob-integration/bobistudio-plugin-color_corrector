@@ -8,7 +8,7 @@
     "class": "mode-corrector",
     "oklch": "0.80 0.05 110"
   },
-  "version": "0.9.0",
+  "version": "0.10.0",
   "video_format": false,
   "adapts_input": true,
   "description": "Correcteur de couleur vidéo (luma/chroma + color balance + glow/bloom) appliqué à chaud sur un flux du pipeline MXL.",
@@ -52,13 +52,17 @@
       "/state",
       "/params",
       "/reset",
-      "/input"
+      "/input",
+      "/log_level"
     ],
     "recall": {
       "source": "plugin_store",
       "scope": "global",
       "endpoint": "/params"
-    }
+    },
+    "read_endpoints": [
+      "/state"
+    ]
   },
   "param_tree": {
     "global_groups": [
@@ -255,6 +259,24 @@
             "default": 0
           }
         }
+      },
+      {
+        "label": "Journal (diagnostic)",
+        "endpoint": "/log_level",
+        "fields": {
+          "level": {
+            "label": "Niveau de log",
+            "type": "enum",
+            "options": [
+              "debug",
+              "info",
+              "warning",
+              "error"
+            ],
+            "default": "info",
+            "path": "log_level"
+          }
+        }
       }
     ]
   },
@@ -303,6 +325,37 @@
           "label": "Teinte (deg, -180..180)",
           "type": "number",
           "optional": true
+        }
+      ]
+    },
+    {
+      "id": "log_level",
+      "label": "Niveau de log (à chaud)",
+      "endpoint": "/log_level",
+      "params": [
+        {
+          "key": "level",
+          "label": "Niveau",
+          "type": "text",
+          "default": "info",
+          "options": [
+            {
+              "value": "debug",
+              "label": "Détaillé"
+            },
+            {
+              "value": "info",
+              "label": "Événements (défaut)"
+            },
+            {
+              "value": "warning",
+              "label": "Anomalies seules"
+            },
+            {
+              "value": "error",
+              "label": "Erreurs seules"
+            }
+          ]
         }
       ]
     }
