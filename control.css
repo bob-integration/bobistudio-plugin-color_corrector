@@ -40,8 +40,6 @@
     text-transform:uppercase; letter-spacing:0.08em;
     color:var(--text-muted); font-weight:600;
 }
-.cc-input-wire { display:flex; gap:6px; align-items:center; flex-wrap:wrap; padding:6px 0; }
-.cc-input-wire input { flex:1; min-width:160px; min-height:32px; }
 .cc-state-bar { font-size:0.85em; color:var(--text-muted); padding:4px 0 8px; }
 .cc-state-bar code { font-family: var(--font-mono); }
 .cc-hint {

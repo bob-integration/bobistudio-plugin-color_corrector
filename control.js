@@ -92,9 +92,9 @@ window.MXLPlugins.color_corrector = (function () {
     // Tracé délégué au catalogue (static/js/controls.js) : le dessin d'un rotatif n'a pas à être
     // réécrit par chaque plugin. La variante est lue sur l'élément (--ctl-knob-draw), donc changer
     // d'aspect ne demandera qu'un changement de classe, pas une réécriture de SVG.
-    function knobSvg(p01, el){
+    function knobSvg(p01, el, def01){
         const k = (el && window.MXLControls) ? window.MXLControls.knobKind(el) : 'arc';
-        return window.MXLControls.knobSvg(k, p01);
+        return window.MXLControls.knobSvg(k, p01, def01);
     }
     function knobHtml(p, value, def){
         const v=(value==null)?def:value, min=p.min, max=p.max, step=p.step, unit=p.unit||'';
@@ -104,7 +104,7 @@ window.MXLPlugins.color_corrector = (function () {
                  aria-valuemin="${min}" aria-valuemax="${max}" aria-valuenow="${v}" aria-valuetext="${fmt(v,step,unit)}"
                  title="Glisser vertical, molette, flèches. Double-clic = réinit."
                  onpointerdown="__cc.knobDown(event,this)" ondblclick="__cc.knobReset(this)"
-                 onwheel="__cc.knobWheel(event,this)" onkeydown="__cc.knobKey(event,this)">${knobSvg((v-min)/(max-min))}</div>
+                 onwheel="__cc.knobWheel(event,this)" onkeydown="__cc.knobKey(event,this)">${knobSvg((v-min)/(max-min), null, (def-min)/(max-min))}</div>
             <input type="number" class="ctl-knob-val" min="${min}" max="${max}" step="${step}" value="${v}"
                    aria-label="${esc(p.label)}" oninput="__cc.knobNumberInput(this)" onchange="__cc.knobNumberCommit(this)">
             <button type="button" class="ctl-knob-reset" tabindex="-1"
@@ -117,7 +117,7 @@ window.MXLPlugins.color_corrector = (function () {
               step=parseFloat(knob.dataset.step), unit=knob.dataset.unit||'';
         v=parseFloat(v.toFixed(decimals(step)));
         const dial=knob.querySelector('.ctl-knob-hit'), num=knob.querySelector('.ctl-knob-val');
-        dial.innerHTML=knobSvg((v-min)/(max-min), knob);
+        dial.innerHTML=knobSvg((v-min)/(max-min), knob, (parseFloat(knob.dataset.default)-min)/(max-min));
         dial.setAttribute('aria-valuenow',v); dial.setAttribute('aria-valuetext',fmt(v,step,unit));
         if(document.activeElement!==num) num.value=v;
     }
@@ -219,7 +219,7 @@ window.MXLPlugins.color_corrector = (function () {
                    onkeydown="if(event.key==='Enter')__cc.savePresetConfirm();if(event.key==='Escape')__cc.savePresetCancel()">
             <button type="button" class="btn btn-green" onclick="__cc.savePresetConfirm()">Enregistrer</button>
             <button type="button" class="btn" onclick="__cc.savePresetCancel()">Annuler</button></div>`
-        :`<select id="cc-preset-select" aria-label="Preset à charger">${presetsOpts}</select>
+        :`<select class="ctl-select" id="cc-preset-select" aria-label="Preset à charger">${presetsOpts}</select>
             <button type="button" class="btn btn-blue" onclick="__cc.loadPreset()">Charger</button>
             <button type="button" class="btn btn-green" onclick="__cc.savePresetOpen()">Enregistrer sous…</button>
             ${pending==='delete-preset'?`<span class="cc-confirm" role="status">Supprimer ce preset ?
@@ -251,9 +251,6 @@ window.MXLPlugins.color_corrector = (function () {
         }
         EL.innerHTML=`<div id="cc-state-bar" class="cc-state-bar"></div><div id="cc-error-slot"></div>
             <div class="cc-toolbar">${saveBlock}</div>
-            <div class="cc-input-wire"><label for="cc-input-shm" style="font-size:0.88em">Câblage entrée :</label>
-                <input id="cc-input-shm" type="text" value="${esc(s.input_shm||'')}" placeholder="nom du shm (sans /dev/shm/)">
-                <button type="button" class="btn btn-blue" onclick="__cc.applyWire()">Appliquer</button></div>
             <div class="cc-section"><h4>Réglages de base</h4>${basicHtml}</div>
             ${advToggle}${advHtml}
             <p class="cc-hint">Glisser le bouton vers le haut / bas, molette ou flèches clavier. Double-clic = réinitialiser.</p>`;
@@ -281,12 +278,6 @@ window.MXLPlugins.color_corrector = (function () {
         pending=null;
         try { const r=await api('/reset', {}); if(!r.ok) throw new Error('HTTP '+r.status); clearError(); }
         catch(e){ showError("Réinitialisation : "+e.message); }
-        refreshState({fullRebuild:true});
-    }
-    async function applyWire(){
-        const v=($('#cc-input-shm').value||'').trim();
-        try { const r=await api('/input', {shm:v||null}); if(!r.ok) throw new Error('HTTP '+r.status); clearError(); }
-        catch(e){ showError("Câblage entrée : "+e.message); }
         refreshState({fullRebuild:true});
     }
     async function loadPreset(){
@@ -331,7 +322,7 @@ window.MXLPlugins.color_corrector = (function () {
     function unmount(){ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } EL=null; VMID=null; }
 
     const exp = {mount, unmount, clearError, knobDown, knobReset, knobWheel, knobKey,
-        knobNumberInput, knobNumberCommit, toggleAdvanced, setGlow, cancelPending, applyWire,
+        knobNumberInput, knobNumberCommit, toggleAdvanced, setGlow, cancelPending,
         loadPreset, savePresetOpen, savePresetCancel, savePresetConfirm,
         deletePresetAsk, deletePresetConfirm, resetAllAsk, resetAllConfirm};
     window.__cc = exp;   // raccourci pour les handlers inline du fragment
