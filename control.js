@@ -66,7 +66,7 @@ window.MXLPlugins.color_corrector = (function () {
         const ae=document.activeElement;
         if(!ae || !EL || !EL.contains(ae)) return false;
         if(ae.tagName==='INPUT'||ae.tagName==='SELECT'||ae.tagName==='TEXTAREA') return true;
-        if(ae.classList && ae.classList.contains('cc-knob-dial')) return true;
+        if(ae.classList && ae.classList.contains('ctl-knob-hit')) return true;
         return false;
     }
 
@@ -89,34 +89,35 @@ window.MXLPlugins.color_corrector = (function () {
     }
 
     // ─── Knob SVG + HTML ───────────────────────────────────
-    function knobSvg(p01){
-        const p=Math.max(0,Math.min(1,p01)), r=22, C=2*Math.PI*r, sweep=C*0.75, prog=sweep*p, ind=-135+p*270;
-        return `<svg viewBox="0 0 56 56" aria-hidden="true">
-            <g transform="rotate(135 28 28)">
-                <circle cx="28" cy="28" r="${r}" fill="none" stroke="var(--border)" stroke-width="3" stroke-dasharray="${sweep} ${C}"/>
-                <circle cx="28" cy="28" r="${r}" fill="none" stroke="var(--accent)" stroke-width="3" stroke-dasharray="${prog} ${C}" stroke-linecap="round"/>
-            </g>
-            <line x1="28" y1="28" x2="28" y2="9" stroke="var(--text-strong)" stroke-width="2" stroke-linecap="round" transform="rotate(${ind} 28 28)"/>
-            <circle cx="28" cy="28" r="2.2" fill="var(--text-muted)"/></svg>`;
+    // Tracé délégué au catalogue (static/js/controls.js) : le dessin d'un rotatif n'a pas à être
+    // réécrit par chaque plugin. La variante est lue sur l'élément (--ctl-knob-draw), donc changer
+    // d'aspect ne demandera qu'un changement de classe, pas une réécriture de SVG.
+    function knobSvg(p01, el){
+        const k = (el && window.MXLControls) ? window.MXLControls.knobKind(el) : 'arc';
+        return window.MXLControls.knobSvg(k, p01);
     }
     function knobHtml(p, value, def){
         const v=(value==null)?def:value, min=p.min, max=p.max, step=p.step, unit=p.unit||'';
-        return `<div class="cc-knob" data-key="${p.key}" data-min="${min}" data-max="${max}" data-step="${step}" data-default="${def}" data-unit="${unit}">
-            <div class="cc-knob-label">${esc(p.label)}</div>
-            <div class="cc-knob-dial" role="slider" tabindex="0" aria-label="${esc(p.label)}"
+        return `<div class="ctl-knob ctl-knob--arc" data-key="${p.key}" data-min="${min}" data-max="${max}" data-step="${step}" data-default="${def}" data-unit="${unit}">
+            <div class="ctl-knob-name">${esc(p.label)}</div>
+            <div class="ctl-knob-hit" role="slider" tabindex="0" aria-label="${esc(p.label)}"
                  aria-valuemin="${min}" aria-valuemax="${max}" aria-valuenow="${v}" aria-valuetext="${fmt(v,step,unit)}"
                  title="Glisser vertical, molette, flèches. Double-clic = réinit."
                  onpointerdown="__cc.knobDown(event,this)" ondblclick="__cc.knobReset(this)"
                  onwheel="__cc.knobWheel(event,this)" onkeydown="__cc.knobKey(event,this)">${knobSvg((v-min)/(max-min))}</div>
-            <input type="number" class="cc-knob-value" min="${min}" max="${max}" step="${step}" value="${v}"
-                   aria-label="${esc(p.label)}" oninput="__cc.knobNumberInput(this)" onchange="__cc.knobNumberCommit(this)"></div>`;
+            <input type="number" class="ctl-knob-val" min="${min}" max="${max}" step="${step}" value="${v}"
+                   aria-label="${esc(p.label)}" oninput="__cc.knobNumberInput(this)" onchange="__cc.knobNumberCommit(this)">
+            <button type="button" class="ctl-knob-reset" tabindex="-1"
+                    title="Remettre à la valeur par défaut (${def}${unit})"
+                    aria-label="Remettre ${esc(p.label)} à sa valeur par défaut"
+                    onclick="__cc.knobReset(this)">↺</button></div>`;
     }
     function knobApply(knob, v){
         const min=parseFloat(knob.dataset.min), max=parseFloat(knob.dataset.max),
               step=parseFloat(knob.dataset.step), unit=knob.dataset.unit||'';
         v=parseFloat(v.toFixed(decimals(step)));
-        const dial=knob.querySelector('.cc-knob-dial'), num=knob.querySelector('.cc-knob-value');
-        dial.innerHTML=knobSvg((v-min)/(max-min));
+        const dial=knob.querySelector('.ctl-knob-hit'), num=knob.querySelector('.ctl-knob-val');
+        dial.innerHTML=knobSvg((v-min)/(max-min), knob);
         dial.setAttribute('aria-valuenow',v); dial.setAttribute('aria-valuetext',fmt(v,step,unit));
         if(document.activeElement!==num) num.value=v;
     }
@@ -125,7 +126,7 @@ window.MXLPlugins.color_corrector = (function () {
     function knobDown(e, dial){
         if(e.button!==undefined && e.button!==0) return;
         e.preventDefault();
-        const knob=dial.parentNode, num=knob.querySelector('.cc-knob-value');
+        const knob=dial.parentNode, num=knob.querySelector('.ctl-knob-val');
         drag={knob, dial, key:knob.dataset.key, startY:e.clientY, startValue:parseFloat(num.value),
               min:parseFloat(knob.dataset.min), max:parseFloat(knob.dataset.max), step:parseFloat(knob.dataset.step)};
         try { dial.setPointerCapture(e.pointerId); } catch(_){}
@@ -146,22 +147,24 @@ window.MXLPlugins.color_corrector = (function () {
         s.dial.removeEventListener('pointermove', knobMove);
         s.dial.removeEventListener('pointerup', knobUp);
         s.dial.removeEventListener('pointercancel', knobUp);
-        const v=parseFloat(s.knob.querySelector('.cc-knob-value').value);
+        const v=parseFloat(s.knob.querySelector('.ctl-knob-val').value);
         drag=null;
         if(!isNaN(v)) postParams({[s.key]: v});
     }
-    function knobReset(dial){
-        const knob=dial.parentNode||dial.closest('.cc-knob'), def=parseFloat(knob.dataset.default);
+    function knobReset(el){
+        // Appelé depuis le cadran (double-clic, Entrée) OU depuis le bouton de remise à zéro :
+        // on remonte au rotatif plutôt que de supposer un parent direct.
+        const knob=el.closest('.ctl-knob')||el.parentNode, def=parseFloat(knob.dataset.default);
         knobApply(knob, def); postParams({[knob.dataset.key]: def});
     }
     function knobWheel(e, dial){
         e.preventDefault();
-        const knob=dial.parentNode, step=parseFloat(knob.dataset.step), num=knob.querySelector('.cc-knob-value');
+        const knob=dial.parentNode, step=parseFloat(knob.dataset.step), num=knob.querySelector('.ctl-knob-val');
         const v=knobClamp(knob, parseFloat(num.value)+(e.deltaY<0?1:-1)*step*(e.shiftKey?10:1));
         knobApply(knob, v); postParams({[knob.dataset.key]: parseFloat(num.value)});
     }
     function knobKey(e, dial){
-        const knob=dial.parentNode, step=parseFloat(knob.dataset.step), num=knob.querySelector('.cc-knob-value');
+        const knob=dial.parentNode, step=parseFloat(knob.dataset.step), num=knob.querySelector('.ctl-knob-val');
         const min=parseFloat(knob.dataset.min), max=parseFloat(knob.dataset.max), mult=e.shiftKey?10:1;
         let v=parseFloat(num.value), handled=true;
         switch(e.key){
@@ -179,14 +182,14 @@ window.MXLPlugins.color_corrector = (function () {
         knobApply(knob, knobClamp(knob, v)); postParams({[knob.dataset.key]: parseFloat(num.value)});
     }
     function knobNumberInput(num){
-        const knob=num.closest('.cc-knob'), v=parseFloat(num.value); if(isNaN(v)) return;
+        const knob=num.closest('.ctl-knob'), v=parseFloat(num.value); if(isNaN(v)) return;
         const min=parseFloat(knob.dataset.min), max=parseFloat(knob.dataset.max), step=parseFloat(knob.dataset.step), unit=knob.dataset.unit||'';
-        const dial=knob.querySelector('.cc-knob-dial'), clamped=Math.max(min,Math.min(max,v));
+        const dial=knob.querySelector('.ctl-knob-hit'), clamped=Math.max(min,Math.min(max,v));
         dial.innerHTML=knobSvg((clamped-min)/(max-min));
         dial.setAttribute('aria-valuenow',v); dial.setAttribute('aria-valuetext',fmt(clamped,step,unit));
     }
     function knobNumberCommit(num){
-        const knob=num.closest('.cc-knob'), v=parseFloat(num.value); if(isNaN(v)) return;
+        const knob=num.closest('.ctl-knob'), v=parseFloat(num.value); if(isNaN(v)) return;
         const clamped=knobClamp(knob, v); knobApply(knob, clamped); postParams({[knob.dataset.key]: clamped});
     }
 
@@ -233,6 +236,19 @@ window.MXLPlugins.color_corrector = (function () {
                     aria-controls="cc-adv-section" onclick="__cc.toggleAdvanced(${!advanced})">
                 <span class="cc-adv-toggle-chevron" aria-hidden="true">▾</span>
                 <span>${advanced?'Masquer le mode avancé':'Afficher le mode avancé'}</span></button></div>`;
+        // Un rendu DÉTRUIT tout le DOM (innerHTML). Si un geste est en cours — et au doigt c'est
+        // fréquent : on tape un rotatif puis on ouvre le mode avancé — ses écouteurs étaient posés
+        // sur un cadran qui n'existe plus, `pointerup` ne viendra jamais, et l'état de glisser
+        // reste armé sur des nœuds détachés. On le solde AVANT de reconstruire.
+        if(drag){
+            try { drag.dial.releasePointerCapture && drag.dial.releasePointerCapture(); } catch(_){}
+            try {
+                drag.dial.removeEventListener('pointermove', knobMove);
+                drag.dial.removeEventListener('pointerup', knobUp);
+                drag.dial.removeEventListener('pointercancel', knobUp);
+            } catch(_){}
+            drag=null;
+        }
         EL.innerHTML=`<div id="cc-state-bar" class="cc-state-bar"></div><div id="cc-error-slot"></div>
             <div class="cc-toolbar">${saveBlock}</div>
             <div class="cc-input-wire"><label for="cc-input-shm" style="font-size:0.88em">Câblage entrée :</label>
