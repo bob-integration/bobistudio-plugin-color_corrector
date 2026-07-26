@@ -1,7 +1,11 @@
 {
-  "version": "0.8.2",
-  "date": "2026-07-12",
+  "version": "0.9.0",
+  "date": "2026-07-26",
   "changes": {
+    "Niveau de log par plugin — silencieux par défaut (0.9.0)": [
+      "Nouveau réglage `log_level` (détaillé / événements / anomalies / erreurs, défaut « Événements »). Les impressions du script sont désormais classées ÉVÉNEMENT (démarrage, câblage d’une entrée, changement de format, reconnexion, repli) vs ANOMALIE (`warning`/`error`) : au niveau par défaut le journal raconte l’histoire du conteneur sans bavardage. Aucune métrique périodique n’est journalisée (le fps est publié sur :8080).",
+      "Pas encore d’endpoint /log_level sur ce plugin : le niveau est appliqué au (re)déploiement. Pilotable par macro via l’étape « config » (config_schema)."
+    ],
     "Masquage UI mode tranche (0.8.2)": [
       "Clés du mode tranche (slice_mode, slice_lines) marquées hidden:true dans le config_schema : plus rendues dans la palette ni le panneau ⚙ — pilotage par le réglage global Réglages → Vidéo « Mode tranche » (slice_mode_global). Les clés restent dans le schéma : coercion, déploiement et API inchangés."
     ],

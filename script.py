@@ -47,6 +47,51 @@ CONFIG         = {config}
 HOSTNAME       = "{hostname}"
 PLUGIN_VERSION = "{plugin_version}"
 
+# ─── Niveau de log ─────────────────────────────────────────────────────────
+# `log_level` (config_schema du plugin, défaut « info ») filtre les impressions du script.
+# Le critère n'est PAS « verbeux vs silencieux » mais ÉVÉNEMENT vs MÉTRIQUE :
+#   debug   — le lance-flammes : par trame, par bande, décisions internes
+#   info    — ÉVÉNEMENTS rares et signifiants  ← DÉFAUT (toujours visible) : démarrage/
+#             arrêt, session ouverte/fermée, changement de format, reconnexion, repli sur
+#             un chemin dégradé, entrée qui apparaît/disparaît, rebascule.
+#   warning — anomalies et replis subis
+#   error   — échecs
+# RÈGLE 1 : après une panne, le journal PAR DÉFAUT doit permettre de RECONSTITUER
+#   l'histoire. Élever le niveau après coup ne récupère RIEN : ce qui n'a pas été écrit
+#   est perdu. On ne coupe donc pas l'information, on coupe la redondance.
+# RÈGLE 2 : une MÉTRIQUE PÉRIODIQUE (fps, compteurs) ne se journalise PAS — elle est déjà
+#   publiée sur :8080 et échantillonnée par l'orchestrateur. La journaliser duplique la
+#   mesure ET consomme la fenêtre de rétention (journal Docker non roté : le bruit purge
+#   les lignes utiles anciennes). Au mieux `debug`.
+# RÈGLE 3 : un événement qui peut partir EN RAFALE s'AGRÈGE sur une fenêtre et sort en UNE
+#   ligne périodique (« N frames lentes sur la dernière minute, pire … ») — le signal
+#   reste, le spam disparaît.
+# Réglable à chaud, sans redéployer, quand le plugin expose l'endpoint de contrôle :
+# POST :8082/log_level {{"level": "debug"}} (exposé aux macros via param_tree/actions).
+_LOG_ORDER = {{"debug": 10, "info": 20, "warning": 30, "error": 40}}
+LOG_LEVEL = str(CONFIG.get("log_level") or "info").strip().lower()
+if LOG_LEVEL not in _LOG_ORDER:
+    LOG_LEVEL = "info"
+_LOG_MIN = _LOG_ORDER[LOG_LEVEL]
+
+
+def log(msg, niveau="info"):
+    """Impression gatée par le niveau de log courant (défaut du message : « info »)."""
+    if _LOG_ORDER.get(niveau, 20) >= _LOG_MIN:
+        print(msg, flush=True)
+
+
+def set_log_level(niveau):
+    """Change le niveau à chaud. Renvoie True si le niveau est reconnu."""
+    global LOG_LEVEL, _LOG_MIN
+    lv = str(niveau or "").strip().lower()
+    if lv not in _LOG_ORDER:
+        return False
+    LOG_LEVEL, _LOG_MIN = lv, _LOG_ORDER[lv]
+    return True
+
+
+
 SHM_OUT           = CONFIG.get("shm_out") or (HOSTNAME + "_cc")
 _gl               = CONFIG.get("genlock", True)
 GENLOCK           = _gl if isinstance(_gl, bool) else str(_gl).strip().lower() in ("1", "true", "yes", "on")
@@ -164,7 +209,7 @@ metrics = {{"fps": 0.0, "frame_index": 0, "inputs_latency_ms": {{}}, "own_latenc
 # SIGBUS
 bus_error = threading.Event()
 def _handle_sigbus(signum, frame):
-    print("SIGBUS reçu — réouverture Reader/Writer MXL")
+    log("SIGBUS reçu — réouverture Reader/Writer MXL", "warning")
     bus_error.set()
 signal.signal(signal.SIGBUS, _handle_sigbus)
 
@@ -268,7 +313,7 @@ def ensure_reader():
     try:
         r = bobimxl.Reader(inst, wanted)   # lève si le flux n'existe pas encore
         reader = r; reader_name = wanted
-        print(f"input câblé sur flux MXL {{wanted}}")
+        log(f"input câblé sur flux MXL {{wanted}}", "info")   # entrée qui apparaît = événement
         return reader
     except Exception:
         return None   # flux pas encore publié → on réessaiera
@@ -599,14 +644,14 @@ while True:
         if SLICE_MODE:
             _il = str(cur_lyt.get("interlace_mode") or "progressive").startswith("interlaced")
             if not GENLOCK:
-                print("slice_mode demandé mais genlock off → repli whole-frame")
+                log("slice_mode demandé mais genlock off → repli whole-frame", "warning")
             elif _il:
-                print("slice_mode demandé mais entrée ENTRELACÉE → repli whole-frame")
+                log("slice_mode demandé mais entrée ENTRELACÉE → repli whole-frame", "warning")
             else:
                 slice_h = _cc_slice_h(cur_lyt["height"])
                 if not slice_h:
-                    print(f"slice_mode demandé mais hauteur {{cur_lyt['height']}} sans diviseur "
-                          "raisonnable → repli whole-frame")
+                    log(f"slice_mode demandé mais hauteur {{cur_lyt['height']}} sans diviseur "
+                        "raisonnable → repli whole-frame", "warning")
         slice_on = slice_h > 0
         with metrics_lock:
             metrics["slice_mode"] = slice_on
@@ -617,8 +662,9 @@ while True:
         # Trame noire de repli CACHÉE : calculée UNE fois au changement de format.
         empty_frame = (b"\x10" * cur_lyt["y_sz"] +
                        b"\x80" * (2 * cur_lyt["uv_sz"]))
-        print(f"format: {{cur_lyt['width']}}x{{cur_lyt['height']}} chroma={{cur_lyt['chroma']}} {{cur_lyt['bit_depth']}}b"
-              + (f" [tranches sh={{slice_h}}]" if slice_on else ""))
+        # Changement de format = ÉVÉNEMENT (visible au niveau par défaut).
+        log(f"format: {{cur_lyt['width']}}x{{cur_lyt['height']}} chroma={{cur_lyt['chroma']}} {{cur_lyt['bit_depth']}}b"
+            + (f" [tranches sh={{slice_h}}]" if slice_on else ""), "info")
 
     fps      = cur_lyt["fps"]
     interval = 1.0 / fps
