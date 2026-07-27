@@ -1077,7 +1077,6 @@ def ensure_writer(lyt, slice_h=0):
     # (parité de champ préservée). Progressif : frame_*==grain, interlace=progressive → inchangé.
     writer = bobimxl.Writer(inst, SHM_OUT, lyt["width"], lyt["frame_height"], lyt["chroma"],
                             lyt["bit_depth"], lyt["frame_fps_num"], lyt["fps_den"],
-                            index_mode=("tai" if GENLOCK else "free"),
                             interlace=lyt["interlace_mode"],
                             **({{"slice_height": int(slice_h)}} if slice_h else {{}}))
 
@@ -1231,7 +1230,7 @@ while True:
         except Exception:
             time.sleep(0.002); continue
         # Grain de sortie à l'index SOURCE (genlock par PROPAGATION, inchangé) + vues par plan.
-        _gidx, gi_o, vw_o = writer.open_grain(index=idx_in)
+        _gidx, gi_o, vw_o = writer.open_grain(src_index=idx_in)
         ysz = cur_lyt["y_sz"]; usz = cur_lyt["uv_sz"]
         g_y = vw_o[:ysz].view(np_dt).reshape(src_h, cur_lyt["width"])
         g_u = vw_o[ysz:ysz + usz].view(np_dt).reshape(cur_lyt["uv_h"], cur_lyt["uv_w"])
@@ -1313,8 +1312,9 @@ while True:
             out_yuv = empty_frame
 
         # Écriture du grain de sortie — genlock par PROPAGATION : même index que l'entrée.
-        out_idx = idx_in if (GENLOCK and got is not None) else None
-        _gidx, gi_o, vw_o = writer.open_grain(index=out_idx)
+        # Propagation de l'origin timestamp : la coordonnée du grain source.
+        # Pas de source → bobimxl retombe sur la grille (règle unique, pas locale).
+        _gidx, gi_o, vw_o = writer.open_grain(src_index=idx_in if got is not None else None)
         vw_o[:len(out_yuv)] = np.frombuffer(out_yuv, dtype=np.uint8)
         writer.commit(gi_o)
     ts_out = time.time_ns()

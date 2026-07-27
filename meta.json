@@ -1,7 +1,12 @@
 {
-  "version": "0.11.0",
+  "version": "0.12.0",
   "date": "2026-07-27",
   "changes": {
+    "Index de sortie : un seul point de calcul, dans bobimxl (0.12.0)": [
+      "L'index des grains de sortie n'est plus calculé dans le plugin : il vient de bobimxl.Writer.next_index, LE point unique pour toute la flotte — grille TAI, strictement croissante, holdover. Chaque plugin réinventait sa version (compteur maison, appel direct à mxlGetCurrentIndex, convention de repli propre), avec les divergences que ça implique.",
+      "Un index de grain est une COORDONNÉE DE TEMPS, pas un numéro de séquence : docs/Timing.md du SDK MXL est normatif (GrainIndex = Timestamp / GrainDurationNs, epoch SMPTE 2059-1). Un compteur parti de 0 casse l'alignement inter-flux et rend le flux irréplicable entre nœuds.",
+      "PROPAGATION de l'origin timestamp : un plugin qui TRAITE un grain source passe open_grain(src_index=...) — le grain de sortie porte la coordonnée de son origine, ce qui garde alignées les branches de latences différentes. Pas de source (entrée absente, trame de garde) → repli sur la grille décidé par bobimxl, plus par chaque plugin."
+    ],
     "Branche « full » (gamma R/G/B) portée en noyau C fusionné (0.11.0)": [
       "La branche need_rgb de _corriger_yuv — roundtrip YUV→RGB→gamma par canal (+color balance)→RGB→YUV, SEUL chemin sans raccourci LUT (un gamma non-linéaire par canal RGB ne se réduit pas à une LUT indexée sur Y) — est désormais exécutée par un noyau C fusionné (tools/cc_full.c, -O3 -mavx2, pthreads glibc-only PAS libgomp) au lieu de ~6 passes mémoire numpy plein cadre par trame. Mesuré sur dl360-1 (Xeon 6240R, bobi-compute:0.17, cpuset compute 22-23,46-47 = 2 cœurs physiques, 1080p 8b 422, appliquer_correction) : gamma R/G/B seul 176 → 41 ms/trame (×4,3), pire cas gamma+cb+teinte+saturation 265 → 70 ms (×3,8 ; dont ~26 ms de teinte/saturation numpy hors périmètre). Le noyau seul (gamma R/G/B) : 97 ms mono-thread → 38 ms à 4 threads. Sur un nœud disposant de plus de cœurs compute, l'échelonnement est quasi linéaire (bandes de lignes chroma disjointes).",
       "STRUCTURE EN ÉTAGES (clé de la perf) : un pow() scalaire dans la boucle par pixel empêche la vectorisation de tout le pipeline (numpy, lui, vectorise np.power). Le noyau sépare donc, par ligne : (1) YUV→RGB studio-range + clip → buffers float (vectorisé AVX2) ; (2) gamma par canal actif via cc_gamma_row (unité SÉPARÉE cc_full_gamma.c compilée en maths relâchées → GCC vectorise powf via libmvec _ZGVdN8vv_powf) ; (3) color-balance + clip + Y = RGB→Y (vectorisé) ; (4) U/V par point-sampling du RGB final. La chroma d'entrée est upsamplée nearest en pleine largeur pour que l'étage 1 lise en contigu.",
