@@ -185,7 +185,9 @@ window.MXLPlugins.color_corrector = (function () {
         const knob=num.closest('.ctl-knob'), v=parseFloat(num.value); if(isNaN(v)) return;
         const min=parseFloat(knob.dataset.min), max=parseFloat(knob.dataset.max), step=parseFloat(knob.dataset.step), unit=knob.dataset.unit||'';
         const dial=knob.querySelector('.ctl-knob-hit'), clamped=Math.max(min,Math.min(max,v));
-        dial.innerHTML=knobSvg((clamped-min)/(max-min));
+        // Le repère de défaut doit être passé ICI aussi : sans lui, saisir la valeur au clavier
+        // effaçait le trait sur l'arc jusqu'au prochain rendu complet.
+        dial.innerHTML=knobSvg((clamped-min)/(max-min), knob, (parseFloat(knob.dataset.default)-min)/(max-min));
         dial.setAttribute('aria-valuenow',v); dial.setAttribute('aria-valuetext',fmt(clamped,step,unit));
     }
     function knobNumberCommit(num){
