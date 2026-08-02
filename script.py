@@ -1315,7 +1315,7 @@ while True:
         # Propagation de l'origin timestamp : la coordonnée du grain source.
         # Pas de source → bobimxl retombe sur la grille (règle unique, pas locale).
         _gidx, gi_o, vw_o = writer.open_grain(src_index=idx_in if got is not None else None)
-        vw_o[:len(out_yuv)] = np.frombuffer(out_yuv, dtype=np.uint8)
+        bobimxl.blit(vw_o, np.frombuffer(out_yuv, dtype=np.uint8))
         writer.commit(gi_o)
     ts_out = time.time_ns()
     # own = traitement PROPRE (correction) SANS les attentes get_slice (suivi du fil ≈ période
