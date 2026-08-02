@@ -26,6 +26,15 @@ import time, threading, json, os, signal
 from collections import deque
 import numpy as np
 import bobimxl
+
+
+def _mxl_lib_state():
+    """Variante libmxl réellement chargée (baseline / x86-64-v3) — diagnostic seul, ne doit
+    JAMAIS faire échouer /state."""
+    try:
+        return bobimxl.lib_info()
+    except Exception:
+        return None
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # ─── Latence : Δ ts_output - ts_input (rolling avg) ────────────
@@ -248,6 +257,7 @@ class ControlHandler(BaseHTTPRequestHandler):
                     "defaults":  dict(DEFAULT_PARAMS),
                     "log_level": LOG_LEVEL,   # lisible en condition de macro
                     "plugin_version": PLUGIN_VERSION,
+                    "mxl_lib": _mxl_lib_state(),
                 }})
         else:
             self._reply(404, {{"error": "not found"}})
