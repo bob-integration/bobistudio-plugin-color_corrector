@@ -27,6 +27,26 @@ from collections import deque
 import numpy as np
 import bobimxl
 
+class _StageDelayNulle:
+    """Repli si le bobimxl de l'IMAGE est plus ancien que le script poussé.
+
+    `deploy.py` pousse `bobimxl.py` à côté du script (il SHADOWE celui de l'image), mais le fait
+    en BEST-EFFORT : un échec de ce push est journalisé et le déploiement continue avec le binding
+    de l'image. Sans ce repli, l'absence de `StageDelay` lèverait AttributeError à l'import et
+    tuerait le conteneur — pour une métrique manquante. Une mesure absente doit coûter la mesure,
+    pas le module. Cf. docs/reference/LATENCE_CHAINE.md.
+    """
+    def observe(self, *a, **k):
+        return False
+
+    def publish(self):
+        return None
+
+
+def _sd_new():
+    return bobimxl.StageDelay() if hasattr(bobimxl, "StageDelay") else _StageDelayNulle()
+
+
 
 def _mxl_lib_state():
     """Variante libmxl réellement chargée (baseline / x86-64-v3) — diagnostic seul, ne doit
@@ -50,6 +70,11 @@ class RollingMs:
 
 lat_in  = RollingMs()   # TRANSIT (ts_read − ts_in producteur) = arrivée
 own_lat = RollingMs()   # traitement PROPRE du nœud (ts_out − ts_read) → own_latency_ms
+# DÉLAI D'ÉTAGE en TRAMES — grandeur DISTINCTE de own_lat ci-dessus, qui est un temps de CALCUL.
+# Cet étage PROPAGE la coordonnée source (open_grain(src_index=)), donc son écart d'index vaut 0
+# par construction : la mesure le publiera avec le drapeau `propage` pour que ce zéro structurel
+# ne se lise pas comme le zéro d'un étage qui re-cadence. Cf. docs/reference/LATENCE_CHAINE.md.
+delai_etage = _sd_new()
 
 # ─── Config injectée (contrat plugin) ───────────────────────
 CONFIG         = {config}
@@ -1241,6 +1266,7 @@ while True:
             time.sleep(0.002); continue
         # Grain de sortie à l'index SOURCE (genlock par PROPAGATION, inchangé) + vues par plan.
         _gidx, gi_o, vw_o = writer.open_grain(src_index=idx_in)
+        delai_etage.observe(writer, _gidx, [(r, idx_in)], propage=True)
         ysz = cur_lyt["y_sz"]; usz = cur_lyt["uv_sz"]
         g_y = vw_o[:ysz].view(np_dt).reshape(src_h, cur_lyt["width"])
         g_u = vw_o[ysz:ysz + usz].view(np_dt).reshape(cur_lyt["uv_h"], cur_lyt["uv_w"])
@@ -1345,3 +1371,4 @@ while True:
             metrics["frame_index"] = frame_index
             metrics["inputs_latency_ms"] = {{in_name: lat_in.avg()}} if in_name else {{}}
             metrics["own_latency_ms"] = own_lat.avg()
+            metrics["delai_etage_trames"] = delai_etage.publish()
