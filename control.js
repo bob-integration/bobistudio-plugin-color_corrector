@@ -11,28 +11,39 @@
 window.MXLPlugins = window.MXLPlugins || {};
 window.MXLPlugins.color_corrector = (function () {
     let EL = null, VMID = null, TOAST = () => {};
+
+    /* i18n (catalogue plugin.color_corrector.*). `window.t` rend la CLÉ BRUTE quand elle manque :
+     * on teste le retour et on retombe sur le français passé en 2e argument, jamais sur un code. */
+    const T = (k, repli) => {
+        const v = window.t ? window.t(k) : k;
+        return (v && v !== k) ? v : (repli !== undefined ? repli : k);
+    };
     let state = null, presets = [], advanced = false, saveOpen = false;
     let pending = null, errorMsg = null, drag = null, pollTimer = null;
 
     const BASIC = [
-        {key: "brightness", label: "Luminosité", min: -1, max: 1, step: 0.01, def: 0, unit: ""},
-        {key: "contrast",   label: "Contraste",  min: 0,  max: 2, step: 0.01, def: 1, unit: ""},
-        {key: "saturation", label: "Saturation", min: 0,  max: 3, step: 0.01, def: 1, unit: ""},
-        {key: "gamma",      label: "Gamma",       min: 0.1, max: 10, step: 0.01, def: 1, unit: ""},
-        {key: "hue",        label: "Teinte",      min: -180, max: 180, step: 1, def: 0, unit: "°"},
+        {key: "brightness", label: T('plugin.color_corrector.brightness', "Luminosité"), min: -1, max: 1, step: 0.01, def: 0, unit: ""},
+        {key: "contrast",   label: T('plugin.color_corrector.contrast', "Contraste"),  min: 0,  max: 2, step: 0.01, def: 1, unit: ""},
+        {key: "saturation", label: T('plugin.color_corrector.saturation', "Saturation"), min: 0,  max: 3, step: 0.01, def: 1, unit: ""},
+        {key: "gamma",      label: T('plugin.color_corrector.gamma', "Gamma"),       min: 0.1, max: 10, step: 0.01, def: 1, unit: ""},
+        {key: "hue",        label: T('plugin.color_corrector.hue', "Teinte"),      min: -180, max: 180, step: 1, def: 0, unit: "°"},
     ];
     const ADV = [
-        {key: "gamma_r", label: "Gamma R", min: 0.1, max: 10, step: 0.01, def: 1, unit: ""},
-        {key: "gamma_g", label: "Gamma V", min: 0.1, max: 10, step: 0.01, def: 1, unit: ""},
-        {key: "gamma_b", label: "Gamma B", min: 0.1, max: 10, step: 0.01, def: 1, unit: ""},
+        {key: "gamma_r", label: T('plugin.color_corrector.gamma_r', "Gamma R"), min: 0.1, max: 10, step: 0.01, def: 1, unit: ""},
+        {key: "gamma_g", label: T('plugin.color_corrector.gamma_g', "Gamma V"), min: 0.1, max: 10, step: 0.01, def: 1, unit: ""},
+        {key: "gamma_b", label: T('plugin.color_corrector.gamma_b', "Gamma B"), min: 0.1, max: 10, step: 0.01, def: 1, unit: ""},
     ];
     const GLOW = [
-        {key: "glow",        label: "Intensité", min: 0,   max: 2,  step: 0.01, def: 0,   unit: ""},
-        {key: "glow_thresh", label: "Seuil",     min: 0,   max: 1,  step: 0.01, def: 0.7, unit: ""},
-        {key: "glow_radius", label: "Rayon",     min: 1,   max: 64, step: 1,    def: 8,   unit: "px"},
+        {key: "glow",        label: T('plugin.color_corrector.glow', "Intensité"), min: 0,   max: 2,  step: 0.01, def: 0,   unit: ""},
+        {key: "glow_thresh", label: T('plugin.color_corrector.glow_thresh', "Seuil"),     min: 0,   max: 1,  step: 0.01, def: 0.7, unit: ""},
+        {key: "glow_radius", label: T('plugin.color_corrector.glow_radius', "Rayon"),     min: 1,   max: 64, step: 1,    def: 8,   unit: "px"},
     ];
-    const CB_AXES = [{key:"r",short:"R"},{key:"g",short:"V"},{key:"b",short:"B"}];
-    const CB_ZONES = [{key:"s",label:"Ombres"},{key:"m",label:"Midtones"},{key:"h",label:"Hautes lum."}];
+    const CB_AXES = [{key:"r",short:T('plugin.color_corrector.axis_r',"R")},
+                     {key:"g",short:T('plugin.color_corrector.axis_g',"V")},
+                     {key:"b",short:T('plugin.color_corrector.axis_b',"B")}];
+    const CB_ZONES = [{key:"s",label:T('plugin.color_corrector.zone_s',"Ombres")},
+                      {key:"m",label:T('plugin.color_corrector.zone_m',"Midtones")},
+                      {key:"h",label:T('plugin.color_corrector.zone_h',"Hautes lum.")}];
 
     const api = (path, body) => fetch(`/api/containers/${VMID}/plugin${path}`, {
         method: body === undefined ? 'GET' : 'POST',
@@ -50,7 +61,7 @@ window.MXLPlugins.color_corrector = (function () {
     function renderError(){
         const slot=$('#cc-error-slot'); if(!slot) return;
         slot.innerHTML = errorMsg ? `<div class="cc-error" role="alert"><span>⚠ ${esc(errorMsg)}</span>
-            <button type="button" aria-label="Fermer" onclick="__cc.clearError()">✕</button></div>` : '';
+            <button type="button" aria-label="${esc(T('plugin.color_corrector.close_error','Fermer'))}" onclick="__cc.clearError()">✕</button></div>` : '';
     }
 
     async function loadPresets(){
@@ -78,14 +89,15 @@ window.MXLPlugins.color_corrector = (function () {
             if(fullRebuild || !$('.cc-toolbar')) render();
             else if(!userIsEditing()) updateStateBar();
         } catch(e){
-            EL.innerHTML=`<div style="color:var(--status-stopped-fg)">Erreur : ${esc(e.message)}</div>`;
+            EL.innerHTML=`<div style="color:var(--status-stopped-fg)">${esc(T('plugin.color_corrector.error','Erreur : {msg}').replace('{msg}', e.message))}</div>`;
         }
     }
 
     function updateStateBar(){
         const bar=$('#cc-state-bar'); if(!bar||!state) return;
         const wire=state.input_shm||'';
-        bar.innerHTML=`entrée : <code>${wire?esc(wire):'(non câblée)'}</code> · sortie : <code>${esc(state.shm_out||'')}</code>`;
+        bar.innerHTML=`${esc(T('plugin.color_corrector.state_in','entrée :'))} <code>${wire?esc(wire):esc(T('plugin.color_corrector.unwired','(non câblée)'))}</code>`
+            + ` · ${esc(T('plugin.color_corrector.state_out','sortie :'))} <code>${esc(state.shm_out||'')}</code>`;
     }
 
     // ─── Knob SVG + HTML ───────────────────────────────────
@@ -102,14 +114,14 @@ window.MXLPlugins.color_corrector = (function () {
             <div class="ctl-knob-name">${esc(p.label)}</div>
             <div class="ctl-knob-hit" role="slider" tabindex="0" aria-label="${esc(p.label)}"
                  aria-valuemin="${min}" aria-valuemax="${max}" aria-valuenow="${v}" aria-valuetext="${fmt(v,step,unit)}"
-                 title="Glisser vertical, molette, flèches. Double-clic = réinit."
+                 title="${esc(T('plugin.color_corrector.knob_tip','Glisser vertical, molette, flèches. Double-clic = réinit.'))}"
                  onpointerdown="__cc.knobDown(event,this)" ondblclick="__cc.knobReset(this)"
                  onwheel="__cc.knobWheel(event,this)" onkeydown="__cc.knobKey(event,this)">${knobSvg((v-min)/(max-min), null, (def-min)/(max-min))}</div>
             <input type="number" class="ctl-knob-val" min="${min}" max="${max}" step="${step}" value="${v}"
                    aria-label="${esc(p.label)}" oninput="__cc.knobNumberInput(this)" onchange="__cc.knobNumberCommit(this)">
             <button type="button" class="ctl-knob-reset" tabindex="-1"
-                    title="Remettre à la valeur par défaut (${def}${unit})"
-                    aria-label="Remettre ${esc(p.label)} à sa valeur par défaut"
+                    title="${esc(T('plugin.color_corrector.knob_reset_tip','Remettre à la valeur par défaut ({def})').replace('{def}', `${def}${unit}`))}"
+                    aria-label="${esc(T('plugin.color_corrector.knob_reset_aria','Remettre {label} à sa valeur par défaut').replace('{label}', p.label))}"
                     onclick="__cc.knobReset(this)">↺</button></div>`;
     }
     function knobApply(knob, v){
@@ -198,46 +210,46 @@ window.MXLPlugins.color_corrector = (function () {
     // ─── Render ────────────────────────────────────────────
     function render(){
         const s=state||{}, p=s.params||{}, def=s.defaults||{};
-        const presetsOpts=['<option value="">— Sélectionner un preset —</option>']
+        const presetsOpts=[`<option value="">${esc(T('plugin.color_corrector.preset_select','— Sélectionner un preset —'))}</option>`]
             .concat(presets.map(pr=>`<option value="${pr.id}">${esc(pr.name)}</option>`)).join('');
         const basicHtml=`<div class="cc-knob-row">${BASIC.map(pp=>knobHtml(pp,p[pp.key],def[pp.key]??pp.def)).join('')}</div>`;
         const glowOn = ((p.glow_enabled ?? def.glow_enabled ?? 1) != 0);
         const advHtml=!advanced?'':`<div id="cc-adv-section">
-            <div class="cc-section"><h4>Gamma par canal</h4>
+            <div class="cc-section"><h4>${esc(T('plugin.color_corrector.sec_gamma','Gamma par canal'))}</h4>
                 <div class="cc-knob-row">${ADV.map(pp=>knobHtml(pp,p[pp.key],def[pp.key]??pp.def)).join('')}</div></div>
-            <div class="cc-section"><h4>Color Balance</h4><div class="cc-cb-grid">
+            <div class="cc-section"><h4>${esc(T('plugin.color_corrector.sec_cb','Color Balance'))}</h4><div class="cc-cb-grid">
                 ${CB_ZONES.map(z=>`<div class="cc-cb-zone"><h5>${z.label}</h5><div class="cc-knob-row cc-knob-row-tight">
                     ${CB_AXES.map(ax=>{const key=`cb_${ax.key}${z.key}`; return knobHtml({key,label:ax.short,min:-1,max:1,step:0.01,def:0,unit:""}, p[key], 0);}).join('')}
                 </div></div>`).join('')}
             </div></div>
-            <div class="cc-section"><h4>Glow / Bloom
+            <div class="cc-section"><h4>${esc(T('plugin.color_corrector.sec_glow','Glow / Bloom'))}
                 <label class="cc-glow-switch"><input type="checkbox" class="ios-toggle" ${glowOn?'checked':''}
-                       aria-label="Activer le glow" onchange="__cc.setGlow(this.checked)"></label></h4>
+                       aria-label="${esc(T('plugin.color_corrector.glow_enable_aria','Activer le glow'))}" onchange="__cc.setGlow(this.checked)"></label></h4>
                 <div class="cc-knob-row ${glowOn?'':'cc-glow-off'}">${GLOW.map(pp=>knobHtml(pp,p[pp.key],def[pp.key]??pp.def)).join('')}</div></div>
             </div>`;
-        const saveBlock=saveOpen?`<div class="cc-inline-prompt" role="group" aria-label="Enregistrer le preset">
-            <label for="cc-preset-name" style="font-size:0.88em">Nom :</label>
-            <input id="cc-preset-name" type="text" placeholder="Mon preset"
+        const saveBlock=saveOpen?`<div class="cc-inline-prompt" role="group" aria-label="${esc(T('plugin.color_corrector.save_group_aria','Enregistrer le preset'))}">
+            <label for="cc-preset-name" style="font-size:0.88em">${esc(T('plugin.color_corrector.name_lbl','Nom :'))}</label>
+            <input id="cc-preset-name" type="text" placeholder="${esc(T('plugin.color_corrector.name_ph','Mon preset'))}"
                    onkeydown="if(event.key==='Enter')__cc.savePresetConfirm();if(event.key==='Escape')__cc.savePresetCancel()">
-            <button type="button" class="btn btn-green" onclick="__cc.savePresetConfirm()">Enregistrer</button>
-            <button type="button" class="btn" onclick="__cc.savePresetCancel()">Annuler</button></div>`
-        :`<select class="ctl-select" id="cc-preset-select" aria-label="Preset à charger">${presetsOpts}</select>
-            <button type="button" class="btn btn-blue" onclick="__cc.loadPreset()">Charger</button>
-            <button type="button" class="btn btn-green" onclick="__cc.savePresetOpen()">Enregistrer sous…</button>
-            ${pending==='delete-preset'?`<span class="cc-confirm" role="status">Supprimer ce preset ?
-                <button type="button" class="btn btn-red" onclick="__cc.deletePresetConfirm()">Confirmer</button>
-                <button type="button" class="btn" onclick="__cc.cancelPending()">Annuler</button></span>`
-            :`<button type="button" class="btn" onclick="__cc.deletePresetAsk()" title="Supprimer le preset sélectionné">Supprimer preset</button>`}
+            <button type="button" class="btn btn-green" onclick="__cc.savePresetConfirm()">${esc(T('plugin.color_corrector.save','Enregistrer'))}</button>
+            <button type="button" class="btn" onclick="__cc.savePresetCancel()">${esc(T('plugin.color_corrector.cancel','Annuler'))}</button></div>`
+        :`<select class="ctl-select" id="cc-preset-select" aria-label="${esc(T('plugin.color_corrector.preset_aria','Preset à charger'))}">${presetsOpts}</select>
+            <button type="button" class="btn btn-blue" onclick="__cc.loadPreset()">${esc(T('plugin.color_corrector.load','Charger'))}</button>
+            <button type="button" class="btn btn-green" onclick="__cc.savePresetOpen()">${esc(T('plugin.color_corrector.save_as','Enregistrer sous…'))}</button>
+            ${pending==='delete-preset'?`<span class="cc-confirm" role="status">${esc(T('plugin.color_corrector.del_preset_ask','Supprimer ce preset ?'))}
+                <button type="button" class="btn btn-red" onclick="__cc.deletePresetConfirm()">${esc(T('plugin.color_corrector.confirm','Confirmer'))}</button>
+                <button type="button" class="btn" onclick="__cc.cancelPending()">${esc(T('plugin.color_corrector.cancel','Annuler'))}</button></span>`
+            :`<button type="button" class="btn" onclick="__cc.deletePresetAsk()" title="${esc(T('plugin.color_corrector.del_preset_tip','Supprimer le preset sélectionné'))}">${esc(T('plugin.color_corrector.del_preset','Supprimer preset'))}</button>`}
             <span class="cc-toolbar-spacer"></span>
-            ${pending==='reset-all'?`<span class="cc-confirm" role="status">Tout réinitialiser ?
-                <button type="button" class="btn btn-orange" onclick="__cc.resetAllConfirm()">Confirmer</button>
-                <button type="button" class="btn" onclick="__cc.cancelPending()">Annuler</button></span>`
-            :`<button type="button" class="btn btn-orange" onclick="__cc.resetAllAsk()">Tout réinitialiser</button>`}`;
+            ${pending==='reset-all'?`<span class="cc-confirm" role="status">${esc(T('plugin.color_corrector.reset_all_ask','Tout réinitialiser ?'))}
+                <button type="button" class="btn btn-orange" onclick="__cc.resetAllConfirm()">${esc(T('plugin.color_corrector.confirm','Confirmer'))}</button>
+                <button type="button" class="btn" onclick="__cc.cancelPending()">${esc(T('plugin.color_corrector.cancel','Annuler'))}</button></span>`
+            :`<button type="button" class="btn btn-orange" onclick="__cc.resetAllAsk()">${esc(T('plugin.color_corrector.reset_all','Tout réinitialiser'))}</button>`}`;
         const advToggle=`<div class="cc-adv-toggle-row">
             <button type="button" class="cc-adv-toggle ${advanced?'is-open':''}" aria-expanded="${advanced?'true':'false'}"
                     aria-controls="cc-adv-section" onclick="__cc.toggleAdvanced(${!advanced})">
                 <span class="cc-adv-toggle-chevron" aria-hidden="true">▾</span>
-                <span>${advanced?'Masquer le mode avancé':'Afficher le mode avancé'}</span></button></div>`;
+                <span>${esc(advanced?T('plugin.color_corrector.adv_hide','Masquer le mode avancé'):T('plugin.color_corrector.adv_show','Afficher le mode avancé'))}</span></button></div>`;
         // Un rendu DÉTRUIT tout le DOM (innerHTML). Si un geste est en cours — et au doigt c'est
         // fréquent : on tape un rotatif puis on ouvre le mode avancé — ses écouteurs étaient posés
         // sur un cadran qui n'existe plus, `pointerup` ne viendra jamais, et l'état de glisser
@@ -253,9 +265,9 @@ window.MXLPlugins.color_corrector = (function () {
         }
         EL.innerHTML=`<div id="cc-state-bar" class="cc-state-bar"></div><div id="cc-error-slot"></div>
             <div class="cc-toolbar">${saveBlock}</div>
-            <div class="cc-section"><h4>Réglages de base</h4>${basicHtml}</div>
+            <div class="cc-section"><h4>${esc(T('plugin.color_corrector.sec_basic','Réglages de base'))}</h4>${basicHtml}</div>
             ${advToggle}${advHtml}
-            <p class="cc-hint">Glisser le bouton vers le haut / bas, molette ou flèches clavier. Double-clic = réinitialiser.</p>`;
+            <p class="cc-hint">${esc(T('plugin.color_corrector.hint','Glisser le bouton vers le haut / bas, molette ou flèches clavier. Double-clic = réinitialiser.'))}</p>`;
         updateStateBar(); renderError();
         if(saveOpen){ const inp=$('#cc-preset-name'); if(inp) inp.focus(); }
     }
@@ -273,18 +285,18 @@ window.MXLPlugins.color_corrector = (function () {
     async function postParams(patch){
         if(VMID==null) return;
         try { const r=await api('/params', patch); if(!r.ok) throw new Error('HTTP '+r.status); clearError(); }
-        catch(e){ showError("Envoi des paramètres : "+e.message); }
+        catch(e){ showError(T('plugin.color_corrector.err_send',"Envoi des paramètres : ")+e.message); }
     }
     function resetAllAsk(){ pending='reset-all'; render(); }
     async function resetAllConfirm(){
         pending=null;
         try { const r=await api('/reset', {}); if(!r.ok) throw new Error('HTTP '+r.status); clearError(); }
-        catch(e){ showError("Réinitialisation : "+e.message); }
+        catch(e){ showError(T('plugin.color_corrector.err_reset',"Réinitialisation : ")+e.message); }
         refreshState({fullRebuild:true});
     }
     async function loadPreset(){
         const sel=$('#cc-preset-select'), pid=parseInt(sel.value);
-        if(!pid){ showError("Sélectionne d'abord un preset à charger."); return; }
+        if(!pid){ showError(T('plugin.color_corrector.err_pick_load',"Sélectionne d'abord un preset à charger.")); return; }
         const pr=presets.find(x=>x.id===pid); if(!pr) return;
         await postParams(pr.params||{}); refreshState({fullRebuild:true});
     }
@@ -303,7 +315,7 @@ window.MXLPlugins.color_corrector = (function () {
     }
     function deletePresetAsk(){
         const sel=$('#cc-preset-select');
-        if(!sel||!parseInt(sel.value)){ showError("Sélectionne d'abord un preset à supprimer."); return; }
+        if(!sel||!parseInt(sel.value)){ showError(T('plugin.color_corrector.err_pick_del',"Sélectionne d'abord un preset à supprimer.")); return; }
         pending='delete-preset'; render();
     }
     async function deletePresetConfirm(){
