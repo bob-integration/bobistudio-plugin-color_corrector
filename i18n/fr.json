@@ -50,5 +50,18 @@
   "plugin.color_corrector.unwired": "(non câblée)",
   "plugin.color_corrector.zone_h": "Hautes lum.",
   "plugin.color_corrector.zone_m": "Midtones",
-  "plugin.color_corrector.zone_s": "Ombres"
+  "plugin.color_corrector.zone_s": "Ombres",
+  "type.color_corrector.badge": "Correcteur",
+  "type.color_corrector.cfg.log_level.help": "Verbosité du journal du conteneur. Défaut « Événements » : les faits marquants (démarrage/arrêt, changement de format, reconnexion, repli sur un chemin dégradé, entrée qui apparaît ou disparaît) sont TOUJOURS écrits — après une panne le journal doit permettre de reconstituer l'histoire, et élever le niveau après coup ne récupère rien. Les métriques périodiques (fps, compteurs) ne sont PAS journalisées : elles sont déjà publiées sur :8080. « Détaillé » = lance-flammes par trame, à n'activer que le temps d'un diagnostic (le journal Docker n'est pas roté).",
+  "type.color_corrector.cfg.log_level.label": "Niveau de log",
+  "type.color_corrector.cfg.log_level.opt.debug": "Détaillé (par trame — diagnostic ponctuel)",
+  "type.color_corrector.cfg.log_level.opt.error": "Erreurs seules",
+  "type.color_corrector.cfg.log_level.opt.info": "Événements (défaut)",
+  "type.color_corrector.cfg.log_level.opt.warning": "Anomalies seules",
+  "type.color_corrector.cfg.slice_lines.help": "Hauteur des bandes (lignes). Doit être un diviseur de la hauteur d'image (36 pour 1080p) — sinon repli image entière.",
+  "type.color_corrector.cfg.slice_lines.label": "Lignes par tranche",
+  "type.color_corrector.cfg.slice_mode.help": "La vidéo est publiée bande par bande sur le bus MXL : l'aval démarre sur la première bande sans attendre l'image complète (latence sous-image). Entrelacé ou hauteur non divisible → repli image entière. Désactivé (défaut) = comportement historique. Exige le genlock (verrou-entrée 1:1) et une entrée progressive.",
+  "type.color_corrector.cfg.slice_mode.label": "Mode tranche (latence sous-image)",
+  "type.color_corrector.label": "Correcteur",
+  "type.color_corrector.wire.consumes.0": "Source vidéo"
 }
