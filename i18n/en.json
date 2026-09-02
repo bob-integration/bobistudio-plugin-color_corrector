@@ -62,6 +62,6 @@
   "type.color_corrector.cfg.slice_lines.label": "Lines per slice",
   "type.color_corrector.cfg.slice_mode.help": "Video is published band by band on the MXL bus: downstream starts on the first band without waiting for the full frame (sub-frame latency). Interlaced or non-divisible height → falls back to whole frame. Disabled (default) = historical behaviour. Requires genlock (1:1 input lock) and a progressive input.",
   "type.color_corrector.cfg.slice_mode.label": "Slice mode (sub-frame latency)",
-  "type.color_corrector.label": "Color corrector",
+  "type.color_corrector.label": "Color Corrector",
   "type.color_corrector.wire.consumes.0": "Video source"
 }

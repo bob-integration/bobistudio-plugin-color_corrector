@@ -62,6 +62,6 @@
   "type.color_corrector.cfg.slice_lines.label": "Lignes par tranche",
   "type.color_corrector.cfg.slice_mode.help": "La vidéo est publiée bande par bande sur le bus MXL : l'aval démarre sur la première bande sans attendre l'image complète (latence sous-image). Entrelacé ou hauteur non divisible → repli image entière. Désactivé (défaut) = comportement historique. Exige le genlock (verrou-entrée 1:1) et une entrée progressive.",
   "type.color_corrector.cfg.slice_mode.label": "Mode tranche (latence sous-image)",
-  "type.color_corrector.label": "Correcteur",
+  "type.color_corrector.label": "Color Corrector",
   "type.color_corrector.wire.consumes.0": "Source vidéo"
 }
