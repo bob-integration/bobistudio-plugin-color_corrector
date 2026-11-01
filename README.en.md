@@ -54,8 +54,9 @@ shadows without touching the highlights, or the reverse, therefore takes a singl
 
 ## What it costs the chain
 
-The corrector works in **slice mode**: it reads its input in bands and publishes the output as it
-goes, following the slices of the source grain. Since the correction is **line-local** — each
+When **slice mode** is on — a global switch in **Settings → MXL** (“Slice the whole chain”), off by default, applied when
+each container is (re)deployed — the corrector reads its input in bands and publishes the output as
+it goes, following the slices of the source grain. Since the correction is **line-local** — each
 output pixel depends only on the matching input pixel — the result is **byte-identical** to
 whole-frame processing.
 

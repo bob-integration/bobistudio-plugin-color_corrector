@@ -7,7 +7,7 @@ passthrough (coût quasi nul, pas de conversion RGB).
 
 ## Régler la correction
 
-Dans **Traitements → Correcteurs** :
+Dans la rubrique **Traitements** :
 
 **Base**
 
@@ -33,13 +33,15 @@ Tous les réglages s'appliquent **en temps réel**, sans redéploiement.
 
 - Luminosité/contraste/gamma (simple)/saturation/teinte passent par des tables précalculées :
   coût quasi nul quel que soit le réglage.
-- **Gamma par canal R/G/B ou color balance** (dès qu'un des 9 champs de balance est non nul)
-  déclenchent un aller-retour YUV→RGB→YUV, plus coûteux — pris en charge par un **noyau C dédié**
-  (AVX2). Sans ce noyau (CPU sans AVX2, ou `.so` non chargé), le repli numpy pur de ce chemin
-  coûte **175 à 280 ms/trame** — très au-dessus du budget d'une trame — et le journal du
-  conteneur le signale (« noyau cc_full indisponible… »). En pratique : sur un nœud sans AVX2,
-  éviter le gamma par canal et la color balance, ou vérifier `GET :8082/state` pour confirmer que
-  le noyau est actif avant de s'en servir en direct.
+- La **color balance** passe elle aussi par des tables (trois tables indexées par la luma, sans
+  aller-retour RGB) : coût quasi nul.
+- Le **gamma par canal R/G/B** (dès qu'un des trois diffère de 1) déclenche un aller-retour
+  YUV→RGB→YUV, plus coûteux (la balance, si elle est réglée, est alors calculée dans le même
+  aller-retour) — pris en charge par un **noyau C dédié** (AVX2). Sans ce noyau (CPU sans AVX2, ou
+  `.so` non chargé), le repli numpy pur de ce chemin coûte **175 à 280 ms/trame** — très au-dessus
+  du budget d'une trame — et le journal du conteneur le signale (« noyau cc_full indisponible… »).
+  En pratique : sur un nœud sans AVX2, éviter le gamma par canal, ou vérifier `GET :8082/state`
+  pour confirmer que le noyau est actif avant de s'en servir en direct.
 - Le **glow** est un flou plein champ : coût proportionnel au rayon, actif seulement si la case
   est cochée ET l'intensité > 0.
 
@@ -62,8 +64,9 @@ Le correcteur peut publier sa sortie **bande par bande** au fil de l'arrivée de
 d'attendre la trame complète (mode tranche MXL) : l'étage correcteur n'ajoute alors plus ~1 image
 de latence de traversée.
 
-- **Opt-in** : paramètre `slice_mode` au déploiement (désactivé par défaut — comportement
-  historique strictement inchangé).
+- **Interrupteur global** : **Réglages → MXL** (groupe Signal & Format), « Trancher toute la chaîne » (éteint par défaut). Il n'y a pas de
+  réglage par conteneur dans l'interface ; la bascule prend effet au (re)déploiement de chaque
+  conteneur.
 - Conditions : genlock actif (verrou-entrée 1:1) et source progressive ; en entrelacé ou genlock
   désactivé, le chemin classique s'applique — le plugin le signale dans le journal si le mode a
   été demandé mais n'a pas pu s'activer.

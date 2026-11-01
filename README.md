@@ -56,7 +56,8 @@ tient donc en un seul réglage.
 
 ## Ce que ça coûte à la chaîne
 
-Le correcteur travaille en **mode tranche** : il lit son entrée par bandes et publie la sortie au
+Quand le **mode tranche** est actif — interrupteur global **Réglages → MXL** (« Trancher toute la chaîne »), éteint par défaut,
+pris en compte au (re)déploiement —, le correcteur lit son entrée par bandes et publie la sortie au
 fur et à mesure, en suivant les tranches du grain source. La correction étant **ligne-locale** —
 chaque pixel de sortie ne dépend que du pixel d'entrée correspondant — le résultat est
 **octet-identique** à celui d'un traitement en image entière.
