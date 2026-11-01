@@ -1,9 +1,23 @@
 {
-  "version": "0.14.0",
+  "version": "0.15.2",
   "date": "2026-08-02",
   "changes": {
+    "Index d'avance publié sur :8080 (0.15.2)": [
+      "`index_ahead` (via bobimxl.index_report) figure dans les métriques :8080. `grid_ms` = l'instant du dernier index écrit moins l'heure TAI, en millisecondes signées, positif pour un index dans le futur. Même règle pour toute la flotte : un plugin qui écrit en avance de la grille se constate au lieu de se deviner."
+    ],
+    "Témoin des bouches-trous MXL (0.15.1)": [
+      "★ Compteur `invalid_grains` par flux sur :8080. Un grain BOUCHE-TROU posé par le writer (MXL_GRAIN_FLAG_INVALID) quand un producteur saute des index revenait MXL_STATUS_OK avec `validSlices = 0`, et l'idiome répandu `int(gi.validSlices or k)` rendait ce zéro comme « k tranches valides » : le bouche-trou était composité comme une image, à pleine confiance. Écarté dans `bobimxl`, le seul point que toute la flotte traverse.",
+      "Le compte est calculé À LA REQUÊTE (aucun coût par trame, jamais périmé). Il importe parce que cadence, index et statut de lecture restent tous PARFAITS pendant un épisode de trous — ce compteur en est le seul témoin."
+    ],
+    "Délai d'étage publié en trames (0.15.0)": [
+      "Le délai introduit par l'étage est publié en TRAMES, en propageant la coordonnée du grain source : un plugin qui traite un grain passe sa coordonnée d'origine, ce qui garde alignées les branches d'une même chaîne et rend le délai mesurable étage par étage.",
+      "Le libellé du type est unifié sur « Color Corrector » (manifeste et catalogues FR/EN) ; le plugin est rangé dans Traitements par son RÔLE dans la chaîne — une entrée, une sortie, et son signal d'entrée RESSORT, ce qui le distingue des plugins de Mesure."
+    ],
     "Variante libmxl exposée dans /state (0.14.0)": [
       "GET /state porte désormais `mxl_lib` : {path, variante} de la libmxl RÉELLEMENT chargée (x86-64-v3/glibc-hwcaps ou baseline), lu via bobimxl.lib_info(). Jusqu'ici cette information n'était constatable que PAR NŒUD (app/placement.py) — un conteneur retombé sur la baseline (~20 % de coût en régime consommateur) ne se voyait qu'indirectement. Protégé par try/except : une erreur de lecture ne casse jamais /state."
+    ],
+    "Écriture du grain par bobimxl.blit (0.13.0)": [
+      "Le grain de sortie est écrit par `bobimxl.blit` (magasins non temporels auto-calibrés) au lieu d'une copie faite dans le plugin : un seul point de copie pour la flotte, calibré à l'exécution."
     ],
     "Index de sortie : un seul point de calcul, dans bobimxl (0.12.0)": [
       "L'index des grains de sortie n'est plus calculé dans le plugin : il vient de bobimxl.Writer.next_index, LE point unique pour toute la flotte — grille TAI, strictement croissante, holdover. Chaque plugin réinventait sa version (compteur maison, appel direct à mxlGetCurrentIndex, convention de repli propre), avec les divergences que ça implique.",
@@ -71,5 +85,6 @@
     ],
     "Corrections": [],
     "Bugs connus": []
-  }
+  },
+  "published_at": "2026-11-01"
 }
