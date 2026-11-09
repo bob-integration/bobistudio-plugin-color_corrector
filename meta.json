@@ -1,7 +1,10 @@
 {
-  "version": "0.15.2",
-  "date": "2026-08-02",
+  "version": "0.15.3",
+  "date": "2026-11-09",
   "changes": {
+    "Version minimale du cœur déclarée (0.15.3)": [
+      "Le manifeste déclare `requires.core_min` = 0.9.9 : l'orchestrateur refuse de l'installer sur un cœur plus ancien et le dit. Valeur = le cœur avec lequel la version précédente a été faite. Rien ne change dans le conteneur : rien à redéployer."
+    ],
     "Index d'avance publié sur :8080 (0.15.2)": [
       "`index_ahead` (via bobimxl.index_report) figure dans les métriques :8080. `grid_ms` = l'instant du dernier index écrit moins l'heure TAI, en millisecondes signées, positif pour un index dans le futur. Même règle pour toute la flotte : un plugin qui écrit en avance de la grille se constate au lieu de se deviner."
     ],
