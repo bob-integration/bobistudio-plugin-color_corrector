@@ -8,7 +8,7 @@
     "class": "mode-corrector",
     "oklch": "0.80 0.05 110"
   },
-  "version": "0.15.3",
+  "version": "0.15.4",
   "requires": {"core_min": "0.9.9"},
   "video_format": false,
   "adapts_input": true,

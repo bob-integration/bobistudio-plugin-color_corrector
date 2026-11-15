@@ -1,7 +1,11 @@
 {
-  "version": "0.15.3",
-  "date": "2026-11-09",
+  "version": "0.15.4",
+  "date": "2026-11-15",
   "changes": {
+    "Entrée entrelacée : les champs sont lus à la suite (0.15.4)": [
+      "Une carte de capture écrit les deux champs d'une trame ensemble (index 2k et 2k+1), une fois par trame. Le correcteur lisait le grain le plus récent : il prenait 2k+1 et sautait 2k. Mesuré sur une capture DeckLink 1080i50 : ~30 champs traités sur 50, et la sortie SDI, qui recolle la paire, ne la trouvait complète qu'une fois en 10 s et envoyait du noir le reste du temps (image qui clignote).",
+      "En entrelacé avec genlock, chaque champ est maintenant lu à la suite du précédent ; au-delà de 4 champs de retard, la lecture repart du premier champ de la trame la plus récente (index pair), pour garder les paires alignées. Le progressif et le mode tranche ne changent pas. À redéployer."
+    ],
     "Version minimale du cœur déclarée (0.15.3)": [
       "Le manifeste déclare `requires.core_min` = 0.9.9 : l'orchestrateur refuse de l'installer sur un cœur plus ancien et le dit. Valeur = le cœur avec lequel la version précédente a été faite. Rien ne change dans le conteneur : rien à redéployer."
     ],

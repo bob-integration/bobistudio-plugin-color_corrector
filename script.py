@@ -1122,6 +1122,27 @@ def ensure_writer(lyt, slice_h=0):
                             interlace=lyt["interlace_mode"],
                             **({{"slice_height": int(slice_h)}} if slice_h else {{}}))
 
+# Interlaced input: fields are read IN SEQUENCE, never "latest". A capture card delivers a whole
+# frame at once, so both fields (2k, 2k+1) land together every frame period; reading the latest
+# grain then returns 2k+1 and skips 2k. Measured on a DeckLink 1080i50 capture (2026-11-15): ~30
+# fields/s processed out of 50, and the downstream SDI output, which weaves the pair (2k, 2k+1),
+# found it complete once in 10 s and sent black for the other 249 frames.
+FIELD_BACKLOG = 4    # fields behind the head before giving up and jumping back to it
+
+def _next_field(r, last_idx):
+    """Next field to process: last_idx + 1 while it is close to the head, else the first field
+    of the newest frame (even index, so pairs stay aligned). None when nothing new is readable."""
+    head = r.head_index()
+    if head == bobimxl.MXL_UNDEFINED_INDEX:
+        return None
+    if last_idx < 0 or head - last_idx > FIELD_BACKLOG:
+        want = head & ~1
+    elif head > last_idx:
+        want = last_idx + 1
+    else:
+        return None
+    return r.get(want, timeout_ns=2_000_000) or r.get_latest()
+
 frame_index = 0
 last_in_idx = -1
 start       = time.time()
@@ -1215,6 +1236,8 @@ while True:
                 if got is None:
                     got = r.get_latest()
             # h_idx indéfini → got=None : pas d'entrée → noir GENLOCK (comme l'historique)
+        elif GENLOCK and str(cur_lyt.get("interlace_mode") or "").startswith("interlaced"):
+            got = _next_field(r, last_in_idx)
         else:
             got = r.get_latest()
     except Exception:
